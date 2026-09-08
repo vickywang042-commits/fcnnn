@@ -90,7 +90,7 @@ export default async (request) => {
     const price = latest?.price;
     if (!price) throw new Error("No completed daily close");
 
-    return respond(200, { symbol, price, date: latest.date, history, splits, source: "Yahoo Finance daily close" });
+    return respond(200, { symbol, price, date: latest.date, history, splits, source: "Yahoo Finance daily close", closeVerification: "completed-daily-v2" });
   } catch (error) {
     console.error("Quote lookup failed", symbol, error.message);
     return respond(502, { error: "Quote lookup failed" });

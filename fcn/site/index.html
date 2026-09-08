@@ -308,12 +308,22 @@ function recordClose(value) {
   const number = Number(price);
   return Number.isFinite(number) ? number : null;
 }
-function trustedCloseForDate(value, date) {
+function trustedCloseForDate(value, date, symbol = "") {
   const close = recordClose(value);
   if (close === null) return null;
+  // A dated value cannot be an official close until that symbol's own market
+  // has closed. Intl time zones handle US/Australian daylight saving changes.
+  if (symbol && !isMarketCloseReadyForSymbol(symbol, date)) return null;
   const age = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? daysBetween(date, todayISO()) : 99;
-  const needsProvenance = age >= 0 && age <= 2 && typeof value === "object" && value !== null;
-  if (needsProvenance && value.officialClose !== true && value.manualClose !== true) return null;
+  const isObject = typeof value === "object" && value !== null;
+  if (isObject && value.manualClose === true) return close;
+  // Quarantine records produced by the older quote function, which could mark
+  // a pre-market daily candle as official. A refresh with the new function
+  // replaces them with a versioned completed-close record.
+  if (isObject && value.officialClose === true) {
+    return value.closeVerification === "completed-daily-v2" ? close : null;
+  }
+  if (age >= 0 && age <= 2) return null;
   return close;
 }
 function recordHigh(value) {
@@ -322,7 +332,7 @@ function recordHigh(value) {
   return Number.isFinite(number) ? number : null;
 }
 function comparableCloseFor(p, u, date, prices) {
-  const close = trustedCloseForDate(historyFor(u.symbol, prices)[date], date);
+  const close = trustedCloseForDate(historyFor(u.symbol, prices)[date], date, u.symbol);
   if (close === null) return null;
   return close * splitFactorFor(p, u, date, prices);
 }
@@ -331,10 +341,10 @@ function latestPriceFor(symbol, prices) {
   if (!hist) return null;
   const dates = Object.keys(hist).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
   if (dates.length === 0) return null;
-  const trustedDates = dates.filter((date) => trustedCloseForDate(hist[date], date) !== null);
+  const trustedDates = dates.filter((date) => trustedCloseForDate(hist[date], date, symbol) !== null);
   if (trustedDates.length === 0) return null;
   const date = trustedDates[trustedDates.length - 1];
-  const price = trustedCloseForDate(hist[date], date);
+  const price = trustedCloseForDate(hist[date], date, symbol);
   return { date, price, high: recordHigh(hist[date]) };
 }
 function totalsByCurrency(p) {
@@ -384,12 +394,12 @@ function koHitForUnderlying(p, u, prices, today = todayISO()) {
     // Daily Memory locks in each underlying only when that day's official
     // closing price reaches KO; do not use the intraday high.
     const hitDate = dates.find((date) => (comparableCloseFor(p, u, date, prices) || 0) >= ko);
-    return hitDate ? { hit: true, date: hitDate, price: trustedCloseForDate(hist[hitDate], hitDate), comparablePrice: comparableCloseFor(p, u, hitDate, prices), rule: "曾於收盤達 KO" } : { hit: false, rule: "尚未於收盤達 KO" };
+    return hitDate ? { hit: true, date: hitDate, price: trustedCloseForDate(hist[hitDate], hitDate, u.symbol), comparablePrice: comparableCloseFor(p, u, hitDate, prices), rule: "曾於收盤達 KO" } : { hit: false, rule: "尚未於收盤達 KO" };
   }
   const current = hist[today];
   const comparablePrice = current ? comparableCloseFor(p, u, today, prices) : null;
   const hit = !!current && (comparablePrice || 0) >= ko;
-  return hit ? { hit: true, date: today, price: trustedCloseForDate(current, today), comparablePrice, rule: "今日收盤達 KO" } : { hit: false, rule: "今日收盤未達 KO" };
+  return hit ? { hit: true, date: today, price: trustedCloseForDate(current, today, u.symbol), comparablePrice, rule: "今日收盤達 KO" } : { hit: false, rule: "今日收盤未達 KO" };
 }
 function dailyKoProgress(p, prices, today = todayISO()) {
   const start = trackingStartOf(p);
@@ -415,7 +425,7 @@ function stepdownKoProgress(p, prices, today = todayISO()) {
   const observed = observationSchedule(p).filter((obs) => obs.date && obs.date <= today && obs.date < maturityOf(p));
   const checks = observed.map((obs) => {
     const results = underlyings.map((u) => {
-      const close = trustedCloseForDate(historyFor(u.symbol, prices)[obs.date], obs.date);
+      const close = trustedCloseForDate(historyFor(u.symbol, prices)[obs.date], obs.date, u.symbol);
       const comparableClose = comparableCloseFor(p, u, obs.date, prices);
       const target = (Number(u.entryPrice) || 0) * obs.thresholdPct / 100;
       return { hit: comparableClose !== null && comparableClose >= target, close, comparableClose, target };
@@ -452,7 +462,7 @@ function koProgressFor(p, prices, today = todayISO()) {
 function maturityOutcome(p, prices) {
   const maturity = maturityOf(p);
   const underlyings = p.underlyings || [];
-  const finalPrices = underlyings.map((u) => trustedCloseForDate(historyFor(u.symbol, prices)[maturity], maturity));
+  const finalPrices = underlyings.map((u) => trustedCloseForDate(historyFor(u.symbol, prices)[maturity], maturity, u.symbol));
   const comparablePrices = underlyings.map((u) => comparableCloseFor(p, u, maturity, prices));
   if (underlyings.length === 0 || finalPrices.some((price) => price === null)) return { ready: false, shares: false };
   const boundaryPct = isStepdown(p) || p.hasKi === false ? Number(p.strikePct) || 0 : Number(p.kiPct) || 0;
@@ -483,6 +493,11 @@ function computeStatus(p, prices, today = todayISO()) {
   }
 
   const progress = koProgressFor(p, prices, today);
+  const scheduledObservationToday = isStepdown(p)
+    && observationSchedule(p).some((observation) => observation.date === today && observation.date < maturity);
+  if (scheduledObservationToday && !productMarketsCloseReady(p, today, today)) {
+    return { key: "live", label: "等待市場收盤", tone: "warning", koProgress: progress, daysToMaturity: daysBetween(today, maturity), waitingForClose: true };
+  }
   if (progress.complete) {
     const firstMonth = structureOf(p) === "EXPRESS_FCN" && p.firstMonthObsEnd && progress.date <= p.firstMonthObsEnd;
     return { key: "called", label: firstMonth ? "首月提前出場" : "提前出場", tone: "success", date: progress.date || today, koProgress: progress, firstMonth };
@@ -645,6 +660,10 @@ function App() {
     results.forEach((r) => {
       if (r.status === "fulfilled") {
         const { raw, symbol, quote } = r.value;
+        if (quote.closeVerification !== "completed-daily-v2") {
+          failCount += 1;
+          return;
+        }
         // Keep the user's original key if it already exists, while also
         // migrating bare/variant symbols to the normalized key.
         const old = next[raw] || next[symbol] || {};
@@ -654,7 +673,7 @@ function App() {
           const price = Number(item?.price);
           const high = Number(item?.high);
           if (/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(price) && price > 0) {
-            history[date] = { price, high: Number.isFinite(high) && high > 0 ? high : price, officialClose: true };
+            history[date] = { price, high: Number.isFinite(high) && high > 0 ? high : price, officialClose: true, closeVerification: quote.closeVerification };
           }
         });
         const quoteDate = /^\d{4}-\d{2}-\d{2}$/.test(quote.date || "") ? quote.date : today;
@@ -664,7 +683,7 @@ function App() {
           ...old,
           ...history,
           $splits: Array.from(splitMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
-          [quoteDate]: { price: quote.price, high: Number(existingQuoteDate.high) || quote.price, officialClose: true },
+          [quoteDate]: { price: quote.price, high: Number(existingQuoteDate.high) || quote.price, officialClose: true, closeVerification: quote.closeVerification },
         };
         if (raw !== symbol) delete next[raw];
       } else failCount += 1;
