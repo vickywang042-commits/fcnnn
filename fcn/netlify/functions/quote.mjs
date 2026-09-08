@@ -9,13 +9,13 @@ function respond(status, body) {
 }
 
 function normalizeYahooSymbol(rawSymbol) {
-  let symbol = String(rawSymbol || "").trim().toUpperCase();
+  let symbol = String(rawSymbol || "").trim().toUpperCase().replace(/\s+/g, "");
   symbol = symbol.replace(/^(NASDAQ|NYSE|AMEX):/, "");
   // The tracker formerly suggested TSM.US for Stooq. Yahoo uses TSM instead.
   if (symbol.endsWith(".US")) symbol = symbol.slice(0, -3);
   // Common structured-note documents write Japanese tickers as 8035 JT or
   // 8035 JP. Yahoo Finance expects the Tokyo suffix: 8035.T.
-  symbol = symbol.replace(/^(\d{4})(?:\.?JP|JT)$/, "$1.T");
+  symbol = symbol.replace(/^(\d{4})(?:\.?(?:JP|JT))$/, "$1.T");
   if (/^\d{4}$/.test(symbol)) symbol = `${symbol}.T`;
   if (!/^[A-Z0-9.^=\-]{1,30}$/.test(symbol)) return "";
   return symbol;
@@ -75,6 +75,27 @@ function isCompletedDailyCloseReady(meta, now = new Date()) {
   return clockInTimeZone(now, timeZone).minutes >= fallbackCloseMinutes(timeZone);
 }
 
+async function fetchYahooChart(symbol, query) {
+  let lastError;
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const response = await fetch(`https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?${query}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 FCN-tracker/1.0",
+          "Accept": "application/json"
+        }
+      });
+      if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data?.chart?.result?.[0]) throw new Error("Yahoo returned no chart data");
+      return data;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Yahoo unavailable");
+}
+
 export default async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
 
@@ -89,16 +110,7 @@ export default async (request) => {
     const periodParams = validStart
       ? `period1=${Math.floor(Date.parse(`${validStart}T00:00:00Z`) / 1000)}&period2=${Math.floor(Date.now() / 1000) + 86400}`
       : "range=5d";
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${periodParams}&interval=1d&includePrePost=false&events=splits`;
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 FCN-tracker/1.0",
-        "Accept": "application/json"
-      }
-    });
-    if (!response.ok) throw new Error(`Yahoo HTTP ${response.status}`);
-
-    const data = await response.json();
+    const data = await fetchYahooChart(symbol, `${periodParams}&interval=1d&includePrePost=false&events=splits`);
     const result = data?.chart?.result?.[0];
     const meta = result?.meta || {};
     const quote = result?.indicators?.quote?.[0] || {};
@@ -125,6 +137,26 @@ export default async (request) => {
     // timestamp (plus a short settlement buffer) instead.
     const exchangeToday = dateInTimeZone(new Date(), exchangeTimeZone);
     if (history.at(-1)?.date === exchangeToday && !isCompletedDailyCloseReady(meta)) history = history.slice(0, -1);
+
+    // Some non-US Yahoo feeds publish the completed close in meta first while
+    // leaving that date's chart close null. Accept it only when its exchange
+    // date is already past, or today's official session has fully completed.
+    const regularMarketPrice = Number(meta.regularMarketPrice);
+    const regularMarketTime = Number(meta.regularMarketTime);
+    if (Number.isFinite(regularMarketPrice) && regularMarketPrice > 0 && Number.isFinite(regularMarketTime) && regularMarketTime > 0) {
+      const regularMarketDate = dateInTimeZone(new Date(regularMarketTime * 1000), exchangeTimeZone);
+      const weekday = new Date(`${regularMarketDate}T12:00:00Z`).getUTCDay();
+      const closeIsReady = regularMarketDate < exchangeToday || (regularMarketDate === exchangeToday && isCompletedDailyCloseReady(meta));
+      if (weekday !== 0 && weekday !== 6 && closeIsReady && !history.some((item) => item.date === regularMarketDate)) {
+        const dayHigh = Number(meta.regularMarketDayHigh);
+        history.push({
+          date: regularMarketDate,
+          price: regularMarketPrice,
+          high: Number.isFinite(dayHigh) && dayHigh > 0 ? dayHigh : regularMarketPrice
+        });
+        history.sort((a, b) => a.date.localeCompare(b.date));
+      }
+    }
 
     const splits = Object.values(result?.events?.splits || {}).map((event) => {
       const numerator = Number(event?.numerator);

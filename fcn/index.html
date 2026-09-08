@@ -3,26 +3,66 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>FCN 追蹤台帳</title>
-<meta name="theme-color" content="#0f172a" />
+<title>FCN記錄</title>
+<meta name="theme-color" content="#07101f" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="FCN台帳" />
+<meta name="apple-mobile-web-app-title" content="FCN記錄" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,500;0,600;1,500&family=IBM+Plex+Sans+TC:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap');
-  html, body { background:#020617; overscroll-behavior:none; font-size:17px; }
-  .font-display { font-family: 'Newsreader', ui-serif, Georgia, serif; }
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
+  :root { color-scheme:dark; }
+  * { box-sizing:border-box; }
+  html, body { background:#07101f; overscroll-behavior:none; font-size:17px; }
+  body {
+    min-height:100vh;
+    background:
+      radial-gradient(circle at 12% -5%, rgba(14,165,233,.12), transparent 30rem),
+      linear-gradient(180deg, #07101f 0%, #060b16 55%, #050914 100%);
+  }
+  .font-display { font-family:'IBM Plex Sans TC', 'IBM Plex Sans', system-ui, sans-serif; }
   .font-body { font-family: 'IBM Plex Sans TC', 'IBM Plex Sans', system-ui, sans-serif; }
   .font-num { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
   .text-slate-500 { color:#aab8d0 !important; }
   .text-slate-600 { color:#8292af !important; }
   .text-slate-400 { color:#c4d0e4 !important; }
-  input, select, button { min-height: 2.35rem; }
+  input, select, textarea {
+    outline:none;
+    transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color:#38bdf8 !important;
+    box-shadow:0 0 0 3px rgba(56,189,248,.14);
+  }
+  input, select, button { min-height:2.5rem; }
+  button { -webkit-tap-highlight-color:transparent; transition:filter .18s ease, transform .18s ease, border-color .18s ease, background .18s ease; }
+  button:active { transform:translateY(1px); }
+  .app-shell { background:transparent !important; }
+  .top-panel {
+    background:linear-gradient(145deg, rgba(15,29,51,.94), rgba(10,20,37,.96));
+    border:1px solid rgba(100,116,139,.30);
+    border-radius:1.15rem;
+    box-shadow:0 18px 50px rgba(0,0,0,.20);
+  }
+  .utility-panel, .pm-panel {
+    background:rgba(12,23,42,.84);
+    border:1px solid rgba(100,116,139,.30);
+    box-shadow:0 12px 34px rgba(0,0,0,.15);
+  }
+  .product-card {
+    background:rgba(12,23,42,.88) !important;
+    border-color:rgba(100,116,139,.38) !important;
+    box-shadow:0 10px 28px rgba(0,0,0,.14);
+  }
+  .dashboard-card { min-height:6.6rem; box-shadow:0 8px 24px rgba(0,0,0,.13); }
+  @media (max-width: 420px) {
+    html, body { font-size:16px; }
+    .mobile-action-label { display:inline !important; }
+  }
 </style>
 </head>
 <body>
@@ -133,11 +173,11 @@ function saveJSON(key, value) {
 // public quote routes because a browser-hosted HTML page cannot reliably call
 // every market-data host directly due to CORS restrictions.
 function normalizeSymbol(rawSymbol) {
-  let s = String(rawSymbol || '').trim().toUpperCase();
+  let s = String(rawSymbol || '').trim().toUpperCase().replace(/\s+/g, '');
   // Accept TSLA, TSLA.US, NASDAQ:TSLA, NYSE:XYZ, etc.
   s = s.replace(/^NASDAQ:/, '').replace(/^NYSE:/, '').replace(/^AMEX:/, '');
   // Tokyo Stock Exchange convenience formats: 8035, 8035JT, 8035.JP -> 8035.T.
-  if (/^\d{4}(JT|JP)$/.test(s)) s = s.slice(0, 4) + ".T";
+  if (/^\d{4}\.?((JT)|(JP))$/.test(s)) s = s.slice(0, 4) + ".T";
   else if (/^\d{4}$/.test(s)) s += ".T";
   else if (/^\d{4}\.JP$/.test(s)) s = s.slice(0, 4) + ".T";
   return s;
@@ -266,6 +306,7 @@ async function fetchNetlifyPrice(rawSymbol, start) {
     price, date: data?.date || null,
     history: Array.isArray(data?.history) ? data.history : [],
     splits: Array.isArray(data?.splits) ? data.splits : [],
+    closeVerification: data?.closeVerification || null,
   };
 }
 
@@ -542,7 +583,7 @@ const emptyUnderlying = () => ({ id: uid(), name: "", symbol: "", entryPrice: ""
 const emptyClient = (currency = "USD") => ({ id: uid(), name: "", amount: "", currency });
 const CURRENCIES = ["USD", "JPY", "AUD", "TWD", "EUR", "HKD"];
 const STRUCTURES = [
-  ["FCN", "FCN｜Fixed Coupon Note", "固定票息、可設 Daily 或 Daily Memory 出場條件"],
+  ["FCN", "FCN", "Fixed Coupon Note；可設 Daily 或 Daily Memory 出場條件"],
   ["STEPDOWN_FCN", "Stepdown FCN", "每月觀察，出場門檻按輸入的步階逐月下降"],
   ["DAC", "DAC", "每日比價，可選 Daily 或 Daily Memory；本台帳不另計每日利息"],
   ["EXPRESS_FCN", "Express FCN", "首月每日比價，未出場後依一般 FCN 規則追蹤"],
@@ -595,6 +636,29 @@ function parsePmReport(text) {
     return { code: normalizeProductCode(match[0]), expectedStatus, label: pmOutcomeLabels[expectedStatus] };
   });
   return Array.from(new Map(entries.map((entry) => [entry.code, entry])).values());
+}
+function comparePmReportWithClientProducts(reportEntries, statuses) {
+  const productsByCode = new Map(statuses.map((item) => [normalizeProductCode(item.p.code), item]));
+  const overlaps = [];
+  const consistent = [];
+  const mismatches = [];
+  reportEntries.forEach((entry) => {
+    const tracked = productsByCode.get(entry.code);
+    // The PM file is the firm's full daily list. Codes that are not in this
+    // user's client ledger are expected and are deliberately ignored.
+    if (!tracked) return;
+    const compared = { ...entry, ...tracked };
+    overlaps.push(compared);
+    if (entry.expectedStatus !== "unknown" && tracked.status.key === entry.expectedStatus) consistent.push(compared);
+    else mismatches.push(compared);
+  });
+  return {
+    reportEntries,
+    overlaps,
+    consistent,
+    mismatches,
+    ignoredCount: reportEntries.length - overlaps.length,
+  };
 }
 function isOneUnderlyingFromCall(status) {
   const progress = status?.koProgress;
@@ -751,19 +815,7 @@ function App() {
   const pmComparison = useMemo(() => {
     const reportEntries = parsePmReport(pmReportText);
     if (reportEntries.length === 0) return null;
-    const productsByCode = new Map(statuses.map((item) => [normalizeProductCode(item.p.code), item]));
-    const reportByCode = new Map(reportEntries.map((entry) => [entry.code, entry]));
-    const consistent = [];
-    const mismatches = [];
-    const reportOnly = [];
-    reportEntries.forEach((entry) => {
-      const tracked = productsByCode.get(entry.code);
-      if (!tracked) reportOnly.push(entry);
-      else if (entry.expectedStatus !== "unknown" && tracked.status.key === entry.expectedStatus) consistent.push({ ...entry, ...tracked });
-      else mismatches.push({ ...entry, ...tracked });
-    });
-    const systemOnly = statuses.filter((item) => isCompletedStatus(item.status) && !item.p.completionConfirmed && !reportByCode.has(normalizeProductCode(item.p.code)));
-    return { reportEntries, consistent, mismatches, reportOnly, systemOnly };
+    return comparePmReportWithClientProducts(reportEntries, statuses);
   }, [pmReportText, statuses]);
 
   const buckets = useMemo(() => {
@@ -814,21 +866,17 @@ function App() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-body pb-10" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-      <div className="max-w-2xl mx-auto px-4 py-6">
-        <div className="flex items-start justify-between gap-4 mb-6">
+    <div className="app-shell min-h-screen text-slate-200 font-body pb-12" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5 sm:py-7">
+        <div className="top-panel flex items-center justify-between gap-4 mb-5 px-4 sm:px-5 py-4">
           <div>
-            <div className="text-xs tracking-widest text-amber-500/80 uppercase mb-1 font-num">Structured Notes Ledger</div>
-            <h1 className="font-display text-3xl text-slate-50 italic">FCN 追蹤台帳</h1>
-            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500 mt-1 font-num">
-              <span>{fmtDate(todayISO())}</span>
-              <span className="rounded-full border border-cyan-800 bg-cyan-950 px-2 py-0.5 text-xs text-cyan-300">修正版 C</span>
-            </div>
+            <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">FCN記錄</h1>
+            <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
           </div>
           <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
-            className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-medium px-3 py-2.5 rounded-lg shrink-0">
+            className="flex items-center gap-2 bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-semibold px-3.5 py-2.5 rounded-xl shrink-0 shadow-lg shadow-amber-950/30">
             <IRefresh className={refreshing ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">今日更新</span>
+            <span className="mobile-action-label">今日更新</span>
           </button>
         </div>
 
@@ -856,7 +904,7 @@ function App() {
           </div>
         )}
 
-        <div className="flex items-center gap-4 mb-6">
+        <div className="utility-panel flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 rounded-xl px-3.5 py-2.5">
           <button onClick={() => { setEditing(emptyProduct()); setShowForm(true); }}
             className="flex items-center gap-2 text-amber-500 hover:text-amber-400 text-sm font-medium">
             <IPlus /> 新增產品
@@ -874,45 +922,43 @@ function App() {
         <label className="block mb-5">
           <div className="text-sm text-slate-300 mb-2">搜尋產品代號</div>
           <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="例如：2026SN1111"
-            className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-slate-50 font-num placeholder:text-slate-500" />
+            className="w-full bg-slate-900/80 border border-slate-600 rounded-xl px-4 py-3 text-slate-50 font-num placeholder:text-slate-500 shadow-inner" />
         </label>
 
-        <div className="mb-6 rounded-2xl border border-cyan-900 bg-slate-900/70 p-4">
+        <div className="pm-panel mb-6 rounded-2xl p-4 sm:p-5">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <div className="text-base font-medium text-cyan-100">PM 每日清單比對</div>
-              <div className="text-sm text-slate-400 mt-1">貼上 AI 辨識後的文字；此欄不會保存，隔天可直接換成新清單。</div>
+              <div className="text-lg font-semibold text-slate-50">PM 每日清單比對</div>
+              <div className="text-sm text-slate-400 mt-1 leading-relaxed">只比對清單中與妳客戶商品重複的代號；其他公司商品會自動略過，不會列為未建檔。</div>
             </div>
             {pmReportText && <button onClick={() => setPmReportText("")} className="shrink-0 text-sm text-cyan-300 hover:text-cyan-200">清除</button>}
           </div>
           <textarea value={pmReportText} onChange={(e) => setPmReportText(e.target.value)} rows="5"
             placeholder={"例如：\n2026SN4253 提前到期\n2026SN4265 提前到期\n2026SN2616 到期保本"}
-            className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950 px-3 py-3 text-base text-slate-100 font-num placeholder:text-slate-600" />
+            className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950/80 px-3.5 py-3 text-base text-slate-100 font-num placeholder:text-slate-600" />
 
           {pmComparison && (
             <div className="mt-4 space-y-3">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                 <PmCount label="清單筆數" count={pmComparison.reportEntries.length} tone="neutral" />
-                <PmCount label="結果一致" count={pmComparison.consistent.length} tone="success" />
-                <PmCount label="結果不同" count={pmComparison.mismatches.length} tone="danger" />
-                <PmCount label="台帳未建檔" count={pmComparison.reportOnly.length} tone="warning" />
+                <PmCount label="客戶商品" count={pmComparison.overlaps.length} tone="neutral" />
+                <PmCount label="系統一致" count={pmComparison.consistent.length} tone="success" />
+                <PmCount label="需要確認" count={pmComparison.mismatches.length} tone="danger" />
               </div>
 
               {pmComparison.mismatches.length > 0 && (
-                <PmResultGroup title="PM 有列，但系統結果不同或無法辨識" tone="danger"
+                <PmResultGroup title="請確認：PM 與系統判定不同" tone="danger"
                   rows={pmComparison.mismatches.map((item) => `${item.code}｜PM：${item.label}；系統：${item.status.label}`)} />
-              )}
-              {pmComparison.systemOnly.length > 0 && (
-                <PmResultGroup title="系統判定結案，但本次 PM 清單沒列" tone="warning"
-                  rows={pmComparison.systemOnly.map((item) => `${item.p.code}｜系統：${item.status.label}`)} />
-              )}
-              {pmComparison.reportOnly.length > 0 && (
-                <PmResultGroup title="PM 清單有，但你的台帳沒有這個商品" tone="neutral"
-                  rows={pmComparison.reportOnly.map((item) => `${item.code}｜PM：${item.label}`)} />
               )}
               {pmComparison.consistent.length > 0 && (
                 <PmResultGroup title="PM 與系統一致" tone="success"
                   rows={pmComparison.consistent.map((item) => `${item.code}｜${item.label}`)} />
+              )}
+              {pmComparison.overlaps.length === 0 && (
+                <div className="rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">這份 PM 清單沒有與妳目前的客戶商品重複。</div>
+              )}
+              {pmComparison.ignoredCount > 0 && (
+                <div className="text-sm text-slate-400">已略過 {pmComparison.ignoredCount} 筆不在妳客戶名單內的商品。</div>
               )}
             </div>
           )}
@@ -925,7 +971,7 @@ function App() {
             </div>
           )}
           {sortedStatuses.map(({ p, status }) => (
-            <div key={p.id} className="border border-slate-600 rounded-xl bg-slate-900/60 overflow-hidden shadow-sm">
+            <div key={p.id} className="product-card border rounded-2xl overflow-hidden">
               <div className="flex items-center justify-between px-4 py-4 cursor-pointer"
                 onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
                 <div className="min-w-0">
@@ -1067,22 +1113,22 @@ function App() {
                   </div>
                   </>}
 
-                  {p.notes && <div className="text-xs text-slate-500 mb-3">備註：{p.notes}</div>}
+                  {p.notes && <div className="text-sm text-slate-400 mb-3">備註：{p.notes}</div>}
 
                   <div className="flex items-center gap-3">
                     {isCompletedStatus(status) && (
                       p.completionConfirmed ? (
                         <button onClick={(e) => { e.stopPropagation(); setCompletionConfirmation(p.id, false); }}
-                          className="text-xs text-slate-400 hover:text-slate-100 flex items-center gap-1">↩ 取消確認</button>
+                          className="text-sm text-slate-400 hover:text-slate-100 flex items-center gap-1">↩ 取消確認</button>
                       ) : (
                         <button onClick={(e) => { e.stopPropagation(); setCompletionConfirmation(p.id, true, status.key); }}
-                          className="text-xs text-emerald-300 hover:text-emerald-200 flex items-center gap-1"><ICheck size={12} /> 確認結案</button>
+                          className="text-sm text-emerald-300 hover:text-emerald-200 flex items-center gap-1"><ICheck size={14} /> 確認結案</button>
                       )
                     )}
                     <button onClick={(e) => { e.stopPropagation(); setEditing(p); setShowForm(true); }}
-                      className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><IPencil size={12} /> 編輯</button>
+                      className="text-sm text-slate-400 hover:text-slate-200 flex items-center gap-1"><IPencil size={14} /> 編輯</button>
                     <button onClick={(e) => { e.stopPropagation(); deleteProduct(p.id); }}
-                      className="text-xs text-rose-500 hover:text-rose-400 flex items-center gap-1"><ITrash size={12} /> 刪除</button>
+                      className="text-sm text-rose-400 hover:text-rose-300 flex items-center gap-1"><ITrash size={14} /> 刪除</button>
                   </div>
                 </div>
               )}
@@ -1121,7 +1167,7 @@ function App() {
 function DashCard({ label, count, tone, icon: Icon, onClick, className = "" }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={className.includes("ring-2")}
-      className={`${className || ""} w-full text-left rounded-xl border px-3 py-3 ${toneClasses[tone]}`}>
+      className={`dashboard-card ${className || ""} w-full text-left rounded-2xl border px-3.5 py-3.5 ${toneClasses[tone]}`}>
       <div className="flex items-center justify-between mb-1">
         <Icon />
         <span className="font-num text-3xl font-semibold">{count}</span>
@@ -1132,9 +1178,9 @@ function DashCard({ label, count, tone, icon: Icon, onClick, className = "" }) {
 }
 function PmCount({ label, count, tone }) {
   return (
-    <div className={`rounded-lg border px-2 py-2 ${toneClasses[tone]}`}>
+    <div className={`rounded-xl border px-2 py-2.5 ${toneClasses[tone]}`}>
       <div className="text-xl font-num font-semibold">{count}</div>
-      <div className="text-xs mt-0.5">{label}</div>
+      <div className="text-sm mt-0.5">{label}</div>
     </div>
   );
 }
