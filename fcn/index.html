@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>FCN 追蹤台帳</title>
+<meta name="theme-color" content="#0f172a" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FCN台帳" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,500;0,600;1,500&family=IBM+Plex+Sans+TC:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap');
+  html, body { background:#020617; overscroll-behavior:none; font-size:17px; }
+  .font-display { font-family: 'Newsreader', ui-serif, Georgia, serif; }
+  .font-body { font-family: 'IBM Plex Sans TC', 'IBM Plex Sans', system-ui, sans-serif; }
+  .font-num { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+  .text-slate-500 { color:#aab8d0 !important; }
+  .text-slate-600 { color:#8292af !important; }
+  .text-slate-400 { color:#c4d0e4 !important; }
+  input, select, button { min-height: 2.35rem; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+// ---------- tiny inline icon glyphs (no external icon package needed) ----------
+const Ico = ({ children, size = 16, className = "" }) => (
+  <span className={className} style={{ fontSize: size, lineHeight: 1, display: "inline-block" }}>{children}</span>
+);
+const IPlus = (p) => <Ico {...p}>＋</Ico>;
+const ITrash = (p) => <Ico {...p}>🗑</Ico>;
+const IRefresh = (p) => <Ico {...p} className={`${p.className||""} inline-block`}>↻</Ico>;
+const IChevDown = (p) => <Ico {...p}>▾</Ico>;
+const IChevUp = (p) => <Ico {...p}>▴</Ico>;
+const IWarn = (p) => <Ico {...p}>⚠</Ico>;
+const ICheck = (p) => <Ico {...p}>✓</Ico>;
+const IX2 = (p) => <Ico {...p}>✕</Ico>;
+const IClock = (p) => <Ico {...p}>◷</Ico>;
+const IPencil = (p) => <Ico {...p}>✎</Ico>;
+const IDownload = (p) => <Ico {...p}>⭳</Ico>;
+const IUpload = (p) => <Ico {...p}>⭱</Ico>;
+
+// ---------- date helpers ----------
+const toISO = (d) => {
+  const dt = d instanceof Date ? d : new Date(d);
+  return [dt.getFullYear(), String(dt.getMonth() + 1).padStart(2, "0"), String(dt.getDate()).padStart(2, "0")].join("-");
+};
+const newYorkTodayISO = () => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+};
+const todayISO = () => newYorkTodayISO();
+function zonedClock(timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value || "0";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, minutes: Number(get("hour")) * 60 + Number(get("minute")) };
+}
+function marketRuleForSymbol(rawSymbol) {
+  const symbol = normalizeSymbol(rawSymbol);
+  if (/\.T$/.test(symbol)) return { name: "東京", timeZone: "Asia/Tokyo", closeMinutes: 15 * 60 + 45 };
+  if (/\.AX$/.test(symbol)) return { name: "澳洲", timeZone: "Australia/Sydney", closeMinutes: 16 * 60 + 20 };
+  if (/\.HK$/.test(symbol)) return { name: "香港", timeZone: "Asia/Hong_Kong", closeMinutes: 16 * 60 + 15 };
+  if (/\.(TW|TWO)$/.test(symbol)) return { name: "台灣", timeZone: "Asia/Taipei", closeMinutes: 13 * 60 + 45 };
+  if (/\.SI$/.test(symbol)) return { name: "新加坡", timeZone: "Asia/Singapore", closeMinutes: 17 * 60 + 15 };
+  if (/\.(KS|KQ)$/.test(symbol)) return { name: "韓國", timeZone: "Asia/Seoul", closeMinutes: 15 * 60 + 45 };
+  if (/\.(NS|BO)$/.test(symbol)) return { name: "印度", timeZone: "Asia/Kolkata", closeMinutes: 15 * 60 + 45 };
+  if (/\.L$/.test(symbol)) return { name: "倫敦", timeZone: "Europe/London", closeMinutes: 16 * 60 + 45 };
+  if (/\.(PA|AS|BR)$/.test(symbol)) return { name: "歐洲", timeZone: "Europe/Paris", closeMinutes: 17 * 60 + 45 };
+  if (/\.(DE|F)$/.test(symbol)) return { name: "德國", timeZone: "Europe/Berlin", closeMinutes: 17 * 60 + 45 };
+  if (/\.SW$/.test(symbol)) return { name: "瑞士", timeZone: "Europe/Zurich", closeMinutes: 17 * 60 + 45 };
+  if (/\.(TO|V)$/.test(symbol)) return { name: "加拿大", timeZone: "America/Toronto", closeMinutes: 16 * 60 + 15 };
+  return { name: "美國", timeZone: "America/New_York", closeMinutes: 16 * 60 + 15 };
+}
+function isMarketCloseReadyForSymbol(symbol, date, asOfDate = todayISO()) {
+  if (asOfDate !== todayISO()) return date <= asOfDate;
+  const rule = marketRuleForSymbol(symbol);
+  const clock = zonedClock(rule.timeZone);
+  if (date < clock.date) return true;
+  if (date > clock.date) return false;
+  return clock.minutes >= rule.closeMinutes;
+}
+function productMarketsCloseReady(p, date, asOfDate = todayISO()) {
+  const underlyings = p.underlyings || [];
+  return underlyings.length > 0 && underlyings.every((u) => isMarketCloseReadyForSymbol(u.symbol, date, asOfDate));
+}
+const addMonths = (dateStr, n) => {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + n);
+  return toISO(d);
+};
+const daysBetween = (a, b) => {
+  const A = new Date(a + "T00:00:00");
+  const B = new Date(b + "T00:00:00");
+  return Math.round((B - A) / 86400000);
+};
+const fmtDate = (s) => {
+  if (!s) return "—";
+  const [y, m, d] = s.split("-");
+  return `${y}/${m}/${d}`;
+};
+const fmtPrice = (value) => Number.isFinite(Number(value))
+  ? Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  : "—";
+
+// ---------- storage (plain localStorage — this runs as an independent hosted app) ----------
+const PRODUCTS_KEY = "fcn:products";
+const PRICES_KEY = "fcn:prices";
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.error(e); }
+}
+
+// ---------- price fetching ----------
+// US stock symbols such as TSLA are normalized here. The app tries several
+// public quote routes because a browser-hosted HTML page cannot reliably call
+// every market-data host directly due to CORS restrictions.
+function normalizeSymbol(rawSymbol) {
+  let s = String(rawSymbol || '').trim().toUpperCase();
+  // Accept TSLA, TSLA.US, NASDAQ:TSLA, NYSE:XYZ, etc.
+  s = s.replace(/^NASDAQ:/, '').replace(/^NYSE:/, '').replace(/^AMEX:/, '');
+  // Tokyo Stock Exchange convenience formats: 8035, 8035JT, 8035.JP -> 8035.T.
+  if (/^\d{4}(JT|JP)$/.test(s)) s = s.slice(0, 4) + ".T";
+  else if (/^\d{4}$/.test(s)) s += ".T";
+  else if (/^\d{4}\.JP$/.test(s)) s = s.slice(0, 4) + ".T";
+  return s;
+}
+
+function yahooSymbol(rawSymbol) {
+  const s = normalizeSymbol(rawSymbol);
+  return s.includes('.') ? s : s;
+}
+
+async function fetchJson(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
+
+async function fetchYahooPrice(rawSymbol) {
+  const symbol = yahooSymbol(rawSymbol);
+  const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d&includePrePost=true`;
+  // Yahoo uses more than one hostname. Trying both avoids a single regional
+  // endpoint or a temporary CORS failure making a common code such as TSLA fail.
+  const mirror = target.replace("query1.finance.yahoo.com", "query2.finance.yahoo.com");
+  const urls = [
+    target, mirror,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
+  ];
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url);
+      const result = data?.chart?.result?.[0];
+      const meta = result?.meta;
+      const closes = result?.indicators?.quote?.[0]?.close || [];
+      const validCloses = closes.filter((v) => Number.isFinite(Number(v)) && Number(v) > 0).map(Number);
+      // Use the first positive quote. `??` alone is not enough because a provider
+      // can return 0 for an unavailable regular-market quote.
+      const candidates = [meta?.regularMarketPrice, meta?.postMarketPrice, meta?.preMarketPrice, validCloses.at(-1)];
+      const price = candidates.map(Number).find((value) => Number.isFinite(value) && value > 0);
+      if (Number.isFinite(price) && price > 0) return price;
+      throw new Error('Yahoo: no price');
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Yahoo unavailable');
+}
+
+// Nasdaq is an independent source for plain US symbols (TSLA, NVDA, AAPL...).
+// It is deliberately before Stooq because Stooq's latest close can be delayed.
+function parseNasdaqPrice(value) {
+  const cleaned = String(value ?? "").replace(/[^0-9.\-]/g, "");
+  const price = Number(cleaned);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+async function fetchNasdaqPrice(rawSymbol) {
+  const symbol = normalizeSymbol(rawSymbol);
+  // Nasdaq only accepts a simple US ticker; foreign-market suffixes continue to
+  // the Yahoo/Stooq fallbacks below.
+  if (!/^[A-Z.\-]+$/.test(symbol) || symbol.includes(".")) throw new Error("Nasdaq: unsupported symbol");
+  const target = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/info?assetclass=stocks`;
+  const urls = [
+    target,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(target)}`
+  ];
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url);
+      const price = parseNasdaqPrice(data?.data?.primaryData?.lastSalePrice);
+      if (price) return price;
+      throw new Error("Nasdaq: no price");
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("Nasdaq unavailable");
+}
+
+async function fetchStooqPrice(rawSymbol) {
+  const s = normalizeSymbol(rawSymbol);
+  const candidates = s.includes('.') ? [s.toLowerCase()] : [s.toLowerCase(), `${s.toLowerCase()}.us`];
+  let lastErr;
+  for (const cand of candidates) {
+    const target = `https://stooq.com/q/l/?s=${encodeURIComponent(cand)}&f=sd2t2ohlcv&h&e=csv`;
+    const urls = [
+      target,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+      `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
+    ];
+    for (const url of urls) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        try {
+          const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const text = await res.text();
+          const lines = text.trim().split(/\r?\n/);
+          if (lines.length < 2) throw new Error('Stooq: no data');
+          const row = lines[1].split(',');
+          // f=sd2t2ohlcv => symbol,date,time,open,high,low,close,volume
+          const price = Number(row[6]);
+          if (!Number.isFinite(price) || price <= 0) throw new Error('Stooq: no close');
+          return price;
+        } finally { clearTimeout(timer); }
+      } catch (e) { lastErr = e; }
+    }
+  }
+  throw lastErr || new Error('Stooq unavailable');
+}
+
+// On Netlify, use our same-origin serverless function first. It fetches Yahoo
+// from the server, so iPhone/Safari CORS rules and public proxy outages cannot
+// prevent normal tickers such as TSLA, AAL and TSM.US from updating.
+async function fetchNetlifyPrice(rawSymbol, start) {
+  const symbol = normalizeSymbol(rawSymbol);
+  const startParam = /^\d{4}-\d{2}-\d{2}$/.test(start || "") ? `&start=${encodeURIComponent(start)}` : "";
+  const data = await fetchJson(`/.netlify/functions/quote?symbol=${encodeURIComponent(symbol)}${startParam}`, 15000);
+  const price = Number(data?.price);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('Netlify: no price');
+  return {
+    price, date: data?.date || null,
+    history: Array.isArray(data?.history) ? data.history : [],
+    splits: Array.isArray(data?.splits) ? data.splits : [],
+  };
+}
+
+async function fetchLivePrice(rawSymbol, startDate) {
+  const s = normalizeSymbol(rawSymbol);
+  if (!s) throw new Error('empty symbol');
+  // Only the server function returns dated daily-close history. Browser quote
+  // fallbacks can expose an intraday last trade, which must never trigger KO.
+  return await fetchNetlifyPrice(s, startDate);
+}
+
+// ---------- product model helpers ----------
+function maturityOf(p) {
+  if (p.finalValuationDate) return p.finalValuationDate;
+  return addMonths(p.tradeDate || p.issueDate || newYorkTodayISO(), Number(p.tenorMonths || 0));
+}
+// FCN here is observed daily (not monthly), so "start of observation" is simply the
+// 開始比價日 the person enters from the product's own documents (保證配息期 ends there).
+function trackingStartOf(p) {
+  const firstStepdownDate = (p.observationDates || []).map((item) => item.date).filter(Boolean).sort()[0];
+  return p.startObsDate || firstStepdownDate || p.tradeDate || p.issueDate || newYorkTodayISO();
+}
+function historyFor(symbol, prices) {
+  const normalized = normalizeSymbol(symbol);
+  return prices[normalized] || prices[symbol] || {};
+}
+function splitEventsFor(symbol, prices) {
+  const events = historyFor(symbol, prices)?.$splits;
+  return Array.isArray(events) ? events.filter((event) => /^\d{4}-\d{2}-\d{2}$/.test(event?.date || "") && Number(event?.numerator) > 0 && Number(event?.denominator) > 0) : [];
+}
+function relevantSplitsFor(p, u, prices, throughDate = "9999-12-31") {
+  const baseDate = p.tradeDate || trackingStartOf(p);
+  return splitEventsFor(u.symbol, prices).filter((event) => event.date > baseDate && event.date <= throughDate);
+}
+function splitFactorFor(p, u, date, prices) {
+  return relevantSplitsFor(p, u, prices, date).reduce((factor, event) => factor * Number(event.numerator) / Number(event.denominator), 1);
+}
+function recordClose(value) {
+  const price = typeof value === "object" && value !== null ? value.price ?? value.close : value;
+  const number = Number(price);
+  return Number.isFinite(number) ? number : null;
+}
+function trustedCloseForDate(value, date) {
+  const close = recordClose(value);
+  if (close === null) return null;
+  const age = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? daysBetween(date, todayISO()) : 99;
+  const needsProvenance = age >= 0 && age <= 2 && typeof value === "object" && value !== null;
+  if (needsProvenance && value.officialClose !== true && value.manualClose !== true) return null;
+  return close;
+}
+function recordHigh(value) {
+  const price = typeof value === "object" && value !== null ? value.high ?? value.price ?? value.close : value;
+  const number = Number(price);
+  return Number.isFinite(number) ? number : null;
+}
+function comparableCloseFor(p, u, date, prices) {
+  const close = trustedCloseForDate(historyFor(u.symbol, prices)[date], date);
+  if (close === null) return null;
+  return close * splitFactorFor(p, u, date, prices);
+}
+function latestPriceFor(symbol, prices) {
+  const hist = historyFor(symbol, prices);
+  if (!hist) return null;
+  const dates = Object.keys(hist).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
+  if (dates.length === 0) return null;
+  const trustedDates = dates.filter((date) => trustedCloseForDate(hist[date], date) !== null);
+  if (trustedDates.length === 0) return null;
+  const date = trustedDates[trustedDates.length - 1];
+  const price = trustedCloseForDate(hist[date], date);
+  return { date, price, high: recordHigh(hist[date]) };
+}
+function totalsByCurrency(p) {
+  return (p.clients || []).reduce((totals, client) => {
+    const currency = client.currency || p.currency || "USD";
+    totals[currency] = (totals[currency] || 0) + (Number(client.amount) || 0);
+    return totals;
+  }, {});
+}
+// price levels implied by the entered percentages, per underlying — entry price × %
+function levelsFor(p, u) {
+  const entry = Number(u.entryPrice) || 0;
+  return {
+    ko: entry * (Number(p.autocallPct) || 0) / 100,
+    strike: entry * (Number(p.strikePct) || 0) / 100,
+    ki: entry * (Number(p.kiPct) || 0) / 100,
+  };
+}
+function productSplitNotices(p, prices) {
+  return (p.underlyings || []).flatMap((u) => relevantSplitsFor(p, u, prices).map((event) => ({ ...event, symbol: normalizeSymbol(u.symbol), underlyingId: u.id })));
+}
+function structureOf(p) { return p.structure || "FCN"; }
+function isFcn(p) { return structureOf(p) === "FCN"; }
+function isStepdown(p) { return structureOf(p) === "STEPDOWN_FCN"; }
+function isDailyStructure(p) { return ["FCN", "DAC", "EXPRESS_FCN"].includes(structureOf(p)); }
+function isAutoCallable(p) { return isDailyStructure(p) || isStepdown(p); }
+function fcnModeOf(p) { return p.fcnMode || "daily"; }
+function stepdownModeOf(p) { return p.stepdownMode || "period_end"; }
+function observationThresholdPct(p, index) {
+  return Math.max(0, (Number(p.autocallPct) || 0) - (Number(p.stepDownPct) || 0) * index);
+}
+function observationSchedule(p) {
+  return (p.observationDates || []).map((item, index) => ({
+    id: item.id || `${p.id || "p"}-${index}`,
+    date: item.date || "",
+    index,
+    thresholdPct: observationThresholdPct(p, index),
+  }));
+}
+function koHitForUnderlying(p, u, prices, today = todayISO()) {
+  const ko = levelsFor(p, u).ko;
+  const start = trackingStartOf(p);
+  const hist = historyFor(u.symbol, prices);
+  const maturity = maturityOf(p);
+  const dates = Object.keys(hist).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= start && date <= today && date < maturity).sort();
+  if (fcnModeOf(p) === "daily_memory") {
+    // Daily Memory locks in each underlying only when that day's official
+    // closing price reaches KO; do not use the intraday high.
+    const hitDate = dates.find((date) => (comparableCloseFor(p, u, date, prices) || 0) >= ko);
+    return hitDate ? { hit: true, date: hitDate, price: trustedCloseForDate(hist[hitDate], hitDate), comparablePrice: comparableCloseFor(p, u, hitDate, prices), rule: "曾於收盤達 KO" } : { hit: false, rule: "尚未於收盤達 KO" };
+  }
+  const current = hist[today];
+  const comparablePrice = current ? comparableCloseFor(p, u, today, prices) : null;
+  const hit = !!current && (comparablePrice || 0) >= ko;
+  return hit ? { hit: true, date: today, price: trustedCloseForDate(current, today), comparablePrice, rule: "今日收盤達 KO" } : { hit: false, rule: "今日收盤未達 KO" };
+}
+function dailyKoProgress(p, prices, today = todayISO()) {
+  const start = trackingStartOf(p);
+  const underlyings = p.underlyings || [];
+  if (!isDailyStructure(p) || underlyings.length === 0) return { complete: false, hitCount: 0, total: underlyings.length, date: null, hits: [] };
+  if (fcnModeOf(p) === "daily_memory") {
+    const hits = underlyings.map((u) => koHitForUnderlying(p, u, prices, today));
+    const complete = hits.every((hit) => hit.hit);
+    const date = complete ? hits.map((hit) => hit.date).sort().at(-1) : null;
+    return { complete, hitCount: hits.filter((hit) => hit.hit).length, total: hits.length, date, hits };
+  }
+  const maturity = maturityOf(p);
+  const commonDates = Object.keys(historyFor(underlyings[0]?.symbol, prices) || {}).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= start && date <= today && date < maturity).sort();
+  const date = commonDates.find((candidate) => underlyings.every((u) => {
+    const record = historyFor(u.symbol, prices)[candidate];
+    return record && (comparableCloseFor(p, u, candidate, prices) || 0) >= levelsFor(p, u).ko;
+  }));
+  const hits = underlyings.map((u) => koHitForUnderlying(p, u, prices, today));
+  return { complete: !!date, hitCount: hits.filter((hit) => hit.hit).length, total: hits.length, date: date || null, hits };
+}
+function stepdownKoProgress(p, prices, today = todayISO()) {
+  const underlyings = p.underlyings || [];
+  const observed = observationSchedule(p).filter((obs) => obs.date && obs.date <= today && obs.date < maturityOf(p));
+  const checks = observed.map((obs) => {
+    const results = underlyings.map((u) => {
+      const close = trustedCloseForDate(historyFor(u.symbol, prices)[obs.date], obs.date);
+      const comparableClose = comparableCloseFor(p, u, obs.date, prices);
+      const target = (Number(u.entryPrice) || 0) * obs.thresholdPct / 100;
+      return { hit: comparableClose !== null && comparableClose >= target, close, comparableClose, target };
+    });
+    return { ...obs, results, complete: underlyings.length > 0 && results.every((result) => result.hit) };
+  });
+  if (stepdownModeOf(p) === "period_end_memory") {
+    const hits = underlyings.map((u, underlyingIndex) => {
+      const check = checks.find((item) => item.results[underlyingIndex]?.hit);
+      return check ? {
+        hit: true, date: check.date, price: check.results[underlyingIndex].close,
+        thresholdPct: check.thresholdPct, rule: "曾於觀察日收盤達標",
+      } : { hit: false, rule: "尚未於觀察日收盤達標" };
+    });
+    const complete = hits.length > 0 && hits.every((hit) => hit.hit);
+    return {
+      complete, hitCount: hits.filter((hit) => hit.hit).length, total: hits.length,
+      date: complete ? hits.map((hit) => hit.date).sort().at(-1) : null, hits, checks,
+    };
+  }
+  const completedCheck = checks.find((item) => item.complete);
+  const latest = checks.at(-1);
+  const hits = underlyings.map((u, index) => latest?.results[index]?.hit
+    ? { hit: true, date: latest.date, price: latest.results[index].close, thresholdPct: latest.thresholdPct, rule: "最近觀察日收盤達標" }
+    : { hit: false, date: latest?.date || null, price: latest?.results[index]?.close ?? null, thresholdPct: latest?.thresholdPct ?? null, rule: latest ? "最近觀察日收盤未達標" : "尚未到觀察日" });
+  return {
+    complete: !!completedCheck, hitCount: hits.filter((hit) => hit.hit).length, total: hits.length,
+    date: completedCheck?.date || null, hits, checks,
+  };
+}
+function koProgressFor(p, prices, today = todayISO()) {
+  return isStepdown(p) ? stepdownKoProgress(p, prices, today) : dailyKoProgress(p, prices, today);
+}
+function maturityOutcome(p, prices) {
+  const maturity = maturityOf(p);
+  const underlyings = p.underlyings || [];
+  const finalPrices = underlyings.map((u) => trustedCloseForDate(historyFor(u.symbol, prices)[maturity], maturity));
+  const comparablePrices = underlyings.map((u) => comparableCloseFor(p, u, maturity, prices));
+  if (underlyings.length === 0 || finalPrices.some((price) => price === null)) return { ready: false, shares: false };
+  const boundaryPct = isStepdown(p) || p.hasKi === false ? Number(p.strikePct) || 0 : Number(p.kiPct) || 0;
+  const shares = underlyings.some((u, index) => comparablePrices[index] < (Number(u.entryPrice) || 0) * boundaryPct / 100);
+  return { ready: true, shares, boundaryPct, finalPrices, comparablePrices };
+}
+const completedStatusMeta = {
+  called: { label: "提前出場", tone: "success" },
+  matured_par: { label: "到期保本", tone: "success" },
+  matured_shares: { label: "到期接股票", tone: "danger" },
+};
+function computeStatus(p, prices, today = todayISO()) {
+  // A confirmed closure is an audit record: freeze the confirmed outcome even
+  // after the calendar has moved beyond the original maturity date.
+  if (p.completionConfirmed && completedStatusMeta[p.completionFinalStatus]) {
+    return { key: p.completionFinalStatus, ...completedStatusMeta[p.completionFinalStatus], confirmed: true };
+  }
+  if (p.documentStatus === "pending") {
+    return { key: "pending_docs", label: "待補最終文件", tone: "warning" };
+  }
+  const maturity = maturityOf(p);
+  const start = trackingStartOf(p);
+  if (today < start) {
+    return {
+      key: "live", label: "保證配息期", tone: "neutral", lockout: true,
+      daysToNext: daysBetween(today, start), daysToMaturity: daysBetween(today, maturity),
+    };
+  }
+
+  const progress = koProgressFor(p, prices, today);
+  if (progress.complete) {
+    const firstMonth = structureOf(p) === "EXPRESS_FCN" && p.firstMonthObsEnd && progress.date <= p.firstMonthObsEnd;
+    return { key: "called", label: firstMonth ? "首月提前出場" : "提前出場", tone: "success", date: progress.date || today, koProgress: progress, firstMonth };
+  }
+
+  if (today >= maturity) {
+    if (!productMarketsCloseReady(p, maturity, today)) {
+      return { key: "live", label: "等待市場收盤", tone: "warning", koProgress: progress, daysToNext: 0, daysToMaturity: 0, waitingForClose: true };
+    }
+    const outcome = maturityOutcome(p, prices);
+    if (!outcome.ready) return { key: "matured_pending", label: "待期末收盤價", tone: "warning", koProgress: progress };
+    return outcome.shares
+      ? { key: "matured_shares", label: "到期接股票", tone: "danger", maturityOutcome: outcome, koProgress: progress }
+      : { key: "matured_par", label: "到期保本", tone: "success", maturityOutcome: outcome, koProgress: progress };
+  }
+
+  return {
+    key: "live", label: "存續中", tone: "neutral", koProgress: progress,
+    daysToNext: daysBetween(today, maturity), daysToMaturity: daysBetween(today, maturity),
+  };
+}
+function isCompletedStatus(status) {
+  return Object.prototype.hasOwnProperty.call(completedStatusMeta, status.key);
+}
+
+const toneClasses = {
+  success: "bg-emerald-950 text-emerald-300 border-emerald-800",
+  danger: "bg-rose-950 text-rose-300 border-rose-800",
+  warning: "bg-amber-950 text-amber-300 border-amber-800",
+  neutral: "bg-slate-800 text-slate-300 border-slate-700",
+};
+
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const emptyUnderlying = () => ({ id: uid(), name: "", symbol: "", entryPrice: "" });
+const emptyClient = (currency = "USD") => ({ id: uid(), name: "", amount: "", currency });
+const CURRENCIES = ["USD", "JPY", "AUD", "TWD", "EUR", "HKD"];
+const STRUCTURES = [
+  ["FCN", "FCN｜Fixed Coupon Note", "固定票息、可設 Daily 或 Daily Memory 出場條件"],
+  ["STEPDOWN_FCN", "Stepdown FCN", "每月觀察，出場門檻按輸入的步階逐月下降"],
+  ["DAC", "DAC", "每日比價，可選 Daily 或 Daily Memory；本台帳不另計每日利息"],
+  ["EXPRESS_FCN", "Express FCN", "首月每日比價，未出場後依一般 FCN 規則追蹤"],
+];
+function structureLabel(p) {
+  return STRUCTURES.find(([key]) => key === (p.structure || "FCN"))?.[1] || "FCN";
+}
+const emptyProduct = () => ({
+  id: uid(), code: "", currency: "USD", structure: "FCN", fcnMode: "daily_memory", stepdownMode: "period_end",
+  documentStatus: "pending", clients: [emptyClient("USD")],
+  tradeDate: todayISO(),
+  tenorMonths: 6, startObsDate: "", finalValuationDate: "",
+  couponRate: "", strikePct: 100, autocallPct: 100, stepDownPct: 5, hasKi: true, kiPct: 70,
+  firstMonthObsEnd: "", observationDates: Array.from({ length: 6 }, () => ({ id: uid(), date: "" })),
+  underlyings: [emptyUnderlying()], notes: "",
+});
+function startDatesForProducts(products) {
+  const starts = {};
+  products.forEach((p) => (p.underlyings || []).forEach((u) => {
+    const symbol = normalizeSymbol(u.symbol);
+    const start = [p.tradeDate, trackingStartOf(p)].filter(Boolean).sort()[0];
+    if (symbol && start && (!starts[symbol] || start < starts[symbol])) starts[symbol] = start;
+  }));
+  return starts;
+}
+function compareProductCode(a, b) {
+  const left = String(a || "").toUpperCase().match(/^(\d{4})SN(\d{1,6})$/);
+  const right = String(b || "").toUpperCase().match(/^(\d{4})SN(\d{1,6})$/);
+  if (left && right) return Number(left[1]) - Number(right[1]) || Number(left[2]) - Number(right[2]);
+  return String(a || "").localeCompare(String(b || ""), "en", { numeric: true, sensitivity: "base" });
+}
+function normalizeProductCode(value) {
+  return String(value || "").toUpperCase().replace(/\s+/g, "");
+}
+const pmOutcomeLabels = {
+  called: "提前到期",
+  matured_par: "到期保本",
+  matured_shares: "到期接股票",
+  unknown: "未辨識結果",
+};
+function parsePmReport(text) {
+  const source = String(text || "");
+  const matches = Array.from(source.matchAll(/(?:MA)?\d{4}SN\d{2,6}/gi));
+  const entries = matches.map((match, index) => {
+    const segment = source.slice(match.index + match[0].length, matches[index + 1]?.index ?? source.length);
+    let expectedStatus = "unknown";
+    if (/到期接股票|接股票/.test(segment)) expectedStatus = "matured_shares";
+    else if (/到期保本|保本出場/.test(segment)) expectedStatus = "matured_par";
+    else if (/提前到期|提前出場/.test(segment)) expectedStatus = "called";
+    return { code: normalizeProductCode(match[0]), expectedStatus, label: pmOutcomeLabels[expectedStatus] };
+  });
+  return Array.from(new Map(entries.map((entry) => [entry.code, entry])).values());
+}
+function isOneUnderlyingFromCall(status) {
+  const progress = status?.koProgress;
+  return status?.key === "live" && progress?.total >= 2 && progress.hitCount === progress.total - 1;
+}
+
+function App() {
+  const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
+  const [prices, setPrices] = useState(() => loadJSON(PRICES_KEY, {}));
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [expanded, setExpanded] = useState({});
+  const [refreshing, setRefreshing] = useState(false);
+  const [manualInputFor, setManualInputFor] = useState(null);
+  const [manualValue, setManualValue] = useState("");
+  const [toast, setToast] = useState(null);
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [oneLeftOnly, setOneLeftOnly] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [pmReportText, setPmReportText] = useState("");
+  const [expiryMonth, setExpiryMonth] = useState(() => todayISO().slice(0, 7));
+  const fileInputRef = React.useRef(null);
+
+  const persistProducts = useCallback((next) => { setProducts(next); saveJSON(PRODUCTS_KEY, next); }, []);
+  const persistPrices = useCallback((next) => { setPrices(next); saveJSON(PRICES_KEY, next); }, []);
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+  const saveProduct = (p) => {
+    const exists = products.some((x) => x.id === p.id);
+    const next = exists ? products.map((x) => (x.id === p.id ? p : x)) : [...products, p];
+    persistProducts(next);
+    setShowForm(false); setEditing(null);
+    showToast("已儲存");
+    // A newly entered ticker should be useful immediately; do not make the user
+    // remember to press the separate refresh button after saving it.
+    const symbolsToFetch = (p.underlyings || []).map((u) => u.symbol).filter(Boolean);
+    if (symbolsToFetch.length) void refreshPricesFor(symbolsToFetch, false, startDatesForProducts(next));
+  };
+  const deleteProduct = (id) => persistProducts(products.filter((x) => x.id !== id));
+  const setCompletionConfirmation = (id, confirmed, finalStatus = null) => {
+    const next = products.map((p) => p.id === id
+      ? {
+          ...p,
+          completionConfirmed: confirmed,
+          completionConfirmedAt: confirmed ? todayISO() : null,
+          completionFinalStatus: confirmed ? finalStatus : null,
+        }
+      : p);
+    persistProducts(next);
+    showToast(confirmed ? "已確認結案；分類清單將不再顯示此商品" : "已取消確認；商品已恢復至分類清單");
+  };
+
+  const allSymbols = useMemo(() => {
+    const s = new Set();
+    products.forEach((p) => (p.underlyings || []).forEach((u) => u.symbol && s.add(normalizeSymbol(u.symbol))));
+    return Array.from(s);
+  }, [products]);
+  const symbolStartDates = useMemo(() => startDatesForProducts(products), [products]);
+
+  const refreshPricesFor = async (symbols, notify = true, startDates = symbolStartDates) => {
+    const today = todayISO();
+    const uniqueSymbols = Array.from(new Set(symbols.map(normalizeSymbol).filter(Boolean)));
+    const results = await Promise.allSettled(uniqueSymbols.map(async (raw) => {
+      const symbol = normalizeSymbol(raw);
+      const quote = await fetchLivePrice(symbol, startDates[symbol]);
+      return { raw, symbol, quote };
+    }));
+    let next = { ...prices };
+    let failCount = 0;
+    results.forEach((r) => {
+      if (r.status === "fulfilled") {
+        const { raw, symbol, quote } = r.value;
+        // Keep the user's original key if it already exists, while also
+        // migrating bare/variant symbols to the normalized key.
+        const old = next[raw] || next[symbol] || {};
+        const history = {};
+        (quote.history || []).forEach((item) => {
+          const date = String(item?.date || "");
+          const price = Number(item?.price);
+          const high = Number(item?.high);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(price) && price > 0) {
+            history[date] = { price, high: Number.isFinite(high) && high > 0 ? high : price, officialClose: true };
+          }
+        });
+        const quoteDate = /^\d{4}-\d{2}-\d{2}$/.test(quote.date || "") ? quote.date : today;
+        const existingQuoteDate = history[quoteDate] || old[quoteDate] || {};
+        const splitMap = new Map([...(old.$splits || []), ...(quote.splits || [])].map((event) => [`${event.date}:${event.numerator}:${event.denominator}`, event]));
+        next[symbol] = {
+          ...old,
+          ...history,
+          $splits: Array.from(splitMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
+          [quoteDate]: { price: quote.price, high: Number(existingQuoteDate.high) || quote.price, officialClose: true },
+        };
+        if (raw !== symbol) delete next[raw];
+      } else failCount += 1;
+    });
+    persistPrices(next);
+    if (notify) showToast(failCount > 0 ? `更新完成，${failCount} 檔無法取得報價` : "全部更新完成");
+    return { updated: results.length - failCount, failCount };
+  };
+
+  const refreshAllPrices = async () => {
+    setRefreshing(true);
+    try {
+      await refreshPricesFor(allSymbols, true, symbolStartDates);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const setManualPrice = () => {
+    if (!manualInputFor || !manualValue) return;
+    const val = parseFloat(manualValue);
+    if (Number.isNaN(val)) return;
+    const today = todayISO();
+    const symbol = normalizeSymbol(manualInputFor);
+    persistPrices({ ...prices, [symbol]: { ...(historyFor(symbol, prices) || {}), [today]: { price: val, high: val, manualClose: true } } });
+    setManualInputFor(null); setManualValue("");
+  };
+
+  const exportBackup = () => {
+    const payload = { exportedAt: new Date().toISOString(), products, prices };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fcn-backup-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("備份已下載");
+  };
+  const importBackup = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (Array.isArray(data.products)) persistProducts(data.products);
+        if (data.prices && typeof data.prices === "object") persistPrices(data.prices);
+        showToast("備份已匯入");
+      } catch (e) { showToast("檔案格式錯誤，匯入失敗"); }
+    };
+    reader.readAsText(file);
+  };
+
+  const statuses = useMemo(() => {
+    const today = todayISO();
+    return products.map((p) => ({ p, status: computeStatus(p, prices, today) }));
+  }, [products, prices]);
+
+  const pmComparison = useMemo(() => {
+    const reportEntries = parsePmReport(pmReportText);
+    if (reportEntries.length === 0) return null;
+    const productsByCode = new Map(statuses.map((item) => [normalizeProductCode(item.p.code), item]));
+    const reportByCode = new Map(reportEntries.map((entry) => [entry.code, entry]));
+    const consistent = [];
+    const mismatches = [];
+    const reportOnly = [];
+    reportEntries.forEach((entry) => {
+      const tracked = productsByCode.get(entry.code);
+      if (!tracked) reportOnly.push(entry);
+      else if (entry.expectedStatus !== "unknown" && tracked.status.key === entry.expectedStatus) consistent.push({ ...entry, ...tracked });
+      else mismatches.push({ ...entry, ...tracked });
+    });
+    const systemOnly = statuses.filter((item) => isCompletedStatus(item.status) && !item.p.completionConfirmed && !reportByCode.has(normalizeProductCode(item.p.code)));
+    return { reportEntries, consistent, mismatches, reportOnly, systemOnly };
+  }, [pmReportText, statuses]);
+
+  const buckets = useMemo(() => {
+    const unconfirmed = (key) => statuses.filter((s) => s.status.key === key && !s.p.completionConfirmed);
+    const called = unconfirmed("called");
+    const maturedPar = unconfirmed("matured_par");
+    const maturedShares = unconfirmed("matured_shares");
+    const pendingDocs = statuses.filter((s) => s.status.key === "pending_docs");
+    const oneLeft = statuses.filter((s) => isOneUnderlyingFromCall(s.status));
+    const upcoming = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+      .sort((a, b) => a.status.daysToNext - b.status.daysToNext);
+    const month = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+      .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
+    return { called, maturedPar, maturedShares, pendingDocs, oneLeft, upcoming, month };
+  }, [statuses, expiryMonth]);
+
+  // exited products (already called / matured) sink to the bottom; live ones sort by soonest maturity
+  const filteredStatuses = useMemo(() => {
+    let result = statuses;
+    if (activeFilter === "called") result = statuses.filter((s) => s.status.key === "called" && !s.p.completionConfirmed);
+    else if (activeFilter === "matured_par") result = statuses.filter((s) => s.status.key === "matured_par" && !s.p.completionConfirmed);
+    else if (activeFilter === "matured_shares") result = statuses.filter((s) => s.status.key === "matured_shares" && !s.p.completionConfirmed);
+    else if (activeFilter === "pending_docs") result = statuses.filter((s) => s.status.key === "pending_docs");
+    else if (activeFilter === "upcoming") result = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+      .sort((a,b) => a.status.daysToMaturity - b.status.daysToMaturity);
+    else if (activeFilter === "month") result = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+      .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
+    return oneLeftOnly ? result.filter((item) => isOneUnderlyingFromCall(item.status)) : result;
+  }, [statuses, activeFilter, expiryMonth, oneLeftOnly]);
+
+  const sortedStatuses = useMemo(() => {
+    const searched = filteredStatuses.filter(({ p }) => !searchText.trim() || String(p.code || "").toUpperCase().includes(searchText.trim().toUpperCase()));
+    const rank = { pending_docs: 0, live: 1, called: 2, matured_par: 2, matured_shares: 2, matured_pending: 2 };
+    return [...searched].sort((a, b) => {
+      // Confirmed records remain visible for audit purposes, but always sit
+      // beneath all products that still need daily attention.
+      const ra = a.p.completionConfirmed ? 3 : (rank[a.status.key] ?? 2);
+      const rb = b.p.completionConfirmed ? 3 : (rank[b.status.key] ?? 2);
+      if (ra !== rb) return ra - rb;
+      if (activeFilter === "upcoming" || activeFilter === "month") return maturityOf(a.p).localeCompare(maturityOf(b.p));
+      return compareProductCode(a.p.code, b.p.code);
+    });
+  }, [filteredStatuses, activeFilter, searchText]);
+
+  const filterCard = (key) => ({
+    onClick: () => key === "one_left" ? setOneLeftOnly((value) => !value) : setActiveFilter(activeFilter === key ? "all" : key),
+    className: `rounded-xl border px-3 py-3 cursor-pointer transition ${(key === "one_left" ? oneLeftOnly : activeFilter === key) ? "ring-2 ring-amber-400" : "hover:border-slate-400"} ${toneClasses[key === "upcoming" || key === "month" || key === "pending_docs" || key === "one_left" ? "warning" : key === "matured_shares" ? "danger" : "success"]}`
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-body pb-10" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <div className="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <div className="text-xs tracking-widest text-amber-500/80 uppercase mb-1 font-num">Structured Notes Ledger</div>
+            <h1 className="font-display text-3xl text-slate-50 italic">FCN 追蹤台帳</h1>
+            <div className="text-sm text-slate-500 mt-1 font-num">{fmtDate(todayISO())}</div>
+          </div>
+          <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
+            className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-medium px-3 py-2.5 rounded-lg shrink-0">
+            <IRefresh className={refreshing ? "animate-spin" : ""} />
+            <span className="hidden sm:inline">今日更新</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+          <DashCard label="待補最終文件" count={buckets.pendingDocs.length} tone="warning" icon={IClock} {...filterCard("pending_docs")} />
+          <DashCard label="提前出場" count={buckets.called.length} tone="success" icon={ICheck} {...filterCard("called")} />
+          <DashCard label="到期保本" count={buckets.maturedPar.length} tone="success" icon={ICheck} {...filterCard("matured_par")} />
+          <DashCard label="到期接股票" count={buckets.maturedShares.length} tone="danger" icon={IX2} {...filterCard("matured_shares")} />
+          <DashCard label="7天內到期" count={buckets.upcoming.length} tone="warning" icon={IClock} {...filterCard("upcoming")} />
+          <DashCard label={`${expiryMonth.replace("-", "/")}到期`} count={buckets.month.length} tone="warning" icon={IClock} {...filterCard("month")} />
+          <DashCard label="只差1檔出場" count={buckets.oneLeft.length} tone="warning" icon={IWarn} {...filterCard("one_left")} />
+        </div>
+
+        <label className="flex items-center gap-3 mb-5 text-sm text-slate-300">
+          <span className="shrink-0">到期月份</span>
+          <input type="month" value={expiryMonth} onChange={(e) => setExpiryMonth(e.target.value)}
+            className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 font-num" />
+          <span className="text-xs text-slate-500">可自行指定月份；點卡片篩選未出場商品</span>
+        </label>
+
+        {(activeFilter !== "all" || oneLeftOnly) && (
+          <div className="flex items-center justify-between mb-4 px-3 py-2 rounded-lg bg-slate-900 border border-slate-600 text-sm text-slate-300">
+            <span>已套用篩選{oneLeftOnly && activeFilter !== "all" ? "（雙重條件）" : ""}；再點同一張卡可取消</span>
+            <button onClick={() => { setActiveFilter("all"); setOneLeftOnly(false); }} className="text-amber-500 hover:text-amber-400">清除全部篩選</button>
+          </div>
+        )}
+
+        <div className="flex items-center gap-4 mb-6">
+          <button onClick={() => { setEditing(emptyProduct()); setShowForm(true); }}
+            className="flex items-center gap-2 text-amber-500 hover:text-amber-400 text-sm font-medium">
+            <IPlus /> 新增產品
+          </button>
+          <button onClick={exportBackup} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IDownload /> 匯出備份
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IUpload /> 匯入還原
+          </button>
+          <input ref={fileInputRef} type="file" accept="application/json" className="hidden"
+            onChange={(e) => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ""; }} />
+        </div>
+
+        <label className="block mb-5">
+          <div className="text-sm text-slate-300 mb-2">搜尋產品代號</div>
+          <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="例如：2026SN1111"
+            className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-3 text-slate-50 font-num placeholder:text-slate-500" />
+        </label>
+
+        <div className="mb-6 rounded-2xl border border-cyan-900 bg-slate-900/70 p-4">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <div className="text-base font-medium text-cyan-100">PM 每日清單比對</div>
+              <div className="text-sm text-slate-400 mt-1">貼上 AI 辨識後的文字；此欄不會保存，隔天可直接換成新清單。</div>
+            </div>
+            {pmReportText && <button onClick={() => setPmReportText("")} className="shrink-0 text-sm text-cyan-300 hover:text-cyan-200">清除</button>}
+          </div>
+          <textarea value={pmReportText} onChange={(e) => setPmReportText(e.target.value)} rows="5"
+            placeholder={"例如：\n2026SN4253 提前到期\n2026SN4265 提前到期\n2026SN2616 到期保本"}
+            className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950 px-3 py-3 text-base text-slate-100 font-num placeholder:text-slate-600" />
+
+          {pmComparison && (
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <PmCount label="清單筆數" count={pmComparison.reportEntries.length} tone="neutral" />
+                <PmCount label="結果一致" count={pmComparison.consistent.length} tone="success" />
+                <PmCount label="結果不同" count={pmComparison.mismatches.length} tone="danger" />
+                <PmCount label="台帳未建檔" count={pmComparison.reportOnly.length} tone="warning" />
+              </div>
+
+              {pmComparison.mismatches.length > 0 && (
+                <PmResultGroup title="PM 有列，但系統結果不同或無法辨識" tone="danger"
+                  rows={pmComparison.mismatches.map((item) => `${item.code}｜PM：${item.label}；系統：${item.status.label}`)} />
+              )}
+              {pmComparison.systemOnly.length > 0 && (
+                <PmResultGroup title="系統判定結案，但本次 PM 清單沒列" tone="warning"
+                  rows={pmComparison.systemOnly.map((item) => `${item.p.code}｜系統：${item.status.label}`)} />
+              )}
+              {pmComparison.reportOnly.length > 0 && (
+                <PmResultGroup title="PM 清單有，但你的台帳沒有這個商品" tone="neutral"
+                  rows={pmComparison.reportOnly.map((item) => `${item.code}｜PM：${item.label}`)} />
+              )}
+              {pmComparison.consistent.length > 0 && (
+                <PmResultGroup title="PM 與系統一致" tone="success"
+                  rows={pmComparison.consistent.map((item) => `${item.code}｜${item.label}`)} />
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          {sortedStatuses.length === 0 && (
+            <div className="text-center text-slate-400 py-16 border border-dashed border-slate-600 rounded-xl">
+              {searchText || activeFilter !== "all" || oneLeftOnly ? "沒有符合目前搜尋或篩選條件的商品" : "還沒有產品，點上面「新增產品」開始記錄"}
+            </div>
+          )}
+          {sortedStatuses.map(({ p, status }) => (
+            <div key={p.id} className="border border-slate-600 rounded-xl bg-slate-900/60 overflow-hidden shadow-sm">
+              <div className="flex items-center justify-between px-4 py-4 cursor-pointer"
+                onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
+                <div className="min-w-0">
+                  <div className="font-medium text-lg text-slate-50 truncate">{p.code || "未命名產品"}</div>
+                  <div className="text-sm text-slate-400 truncate">
+                    {structureLabel(p)} ・ {(p.clients || []).map((c) => c.name).filter(Boolean).join("、") || "—"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`px-3 py-1.5 rounded-full text-sm border font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
+                  {p.completionConfirmed && (
+                    <span className="px-2.5 py-1.5 rounded-full text-xs border border-slate-600 bg-slate-800 text-slate-300">已確認結案</span>
+                  )}
+                  {productSplitNotices(p, prices).length > 0 && (
+                    <span className="px-2.5 py-1.5 rounded-full text-xs border border-cyan-700 bg-cyan-950 text-cyan-200">拆股已換算</span>
+                  )}
+                  {status.key === "live" && <span className="text-sm text-slate-400 font-num hidden sm:inline">{status.daysToMaturity}天後到期</span>}
+                  {expanded[p.id] ? <IChevUp className="text-slate-500" /> : <IChevDown className="text-slate-500" />}
+                </div>
+              </div>
+
+              {expanded[p.id] && (
+                <div className="px-4 pb-5 border-t border-slate-700 pt-4 text-base">
+                  {status.key === "pending_docs" && (
+                    <div className="mb-4 rounded-xl border border-amber-700 bg-amber-950/40 px-4 py-3 text-amber-100">
+                      <div className="font-medium">等待最終文件</div>
+                      <div className="text-sm text-amber-200/80 mt-1">文件收到後按下方「編輯」，切換成「最終文件已收到」並補齊條款。</div>
+                    </div>
+                  )}
+                  <div className="mb-3">
+                    <div className="text-sm text-slate-400 mb-1.5">客戶與投入金額</div>
+                    <div className="space-y-1">
+                      {(p.clients || []).map((c) => (
+                        <div key={c.id} className="flex justify-between font-num text-sm bg-slate-950/60 rounded-lg px-3 py-2">
+                          <span className="text-slate-300 font-body">{c.name || "—"}</span>
+                          <span className="text-slate-300">{c.amount ? Number(c.amount).toLocaleString() : "—"} {c.currency || p.currency}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-sm px-3 pt-1 text-slate-400">
+                        <span>分幣別合計</span>
+                        <span className="font-num text-right">{Object.entries(totalsByCurrency(p)).map(([currency, amount]) => `${amount.toLocaleString()} ${currency}`).join(" / ") || "—"}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {status.key !== "pending_docs" && <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4 text-base">
+                    <Field label="商品架構" value={structureLabel(p)} />
+                    <Field label="出場模式" value={isStepdown(p) ? (stepdownModeOf(p) === "period_end_memory" ? "Period End Memory" : "Period End") : (fcnModeOf(p) === "daily_memory" ? "Daily Memory" : "Daily")} />
+                    <Field label="商品幣別" value={p.currency || "USD"} />
+                    <Field label="交易日" value={fmtDate(p.tradeDate)} />
+                    <Field label="開始比價日" value={p.startObsDate ? fmtDate(p.startObsDate) : (isStepdown(p) ? "見觀察日" : "—")} />
+                    <Field label="期末評價日" value={fmtDate(maturityOf(p))} />
+                    <Field label="年化配息" value={p.couponRate ? `${p.couponRate}%` : "—"} />
+                    <Field label="執行價" value={`${p.strikePct}%`} />
+                    <Field label="出場價" value={`${p.autocallPct}%`} />
+                    <Field label="期末判斷" value={isStepdown(p) || p.hasKi === false ? `執行價 ${p.strikePct}%` : `KI ${p.kiPct}%`} />
+                    {isStepdown(p) && <Field label="每月步階下降" value={`${p.stepDownPct || 0}%`} />}
+                    {structureOf(p) === "EXPRESS_FCN" && <Field label="首月觀察結束" value={p.firstMonthObsEnd ? fmtDate(p.firstMonthObsEnd) : "—"} />}
+                  </div>
+
+                  {isStepdown(p) && (
+                    <div className="mb-4 rounded-xl border border-slate-700 bg-slate-950/50 p-3">
+                      <div className="text-base text-slate-100 mb-2">Stepdown 每月觀察日（各市場正式收盤）</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {observationSchedule(p).map((obs) => {
+                          const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
+                          return <div key={obs.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-sm">
+                            <span>第 {obs.index + 1} 月・{obs.date ? fmtDate(obs.date) : "未填日期"}</span>
+                            <span className={check?.complete ? "text-emerald-300" : "text-amber-300"}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 全數達標" : "已比價") : ""}</span>
+                          </div>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mb-3">
+                    <div className="text-base text-slate-200 mb-2 flex flex-wrap items-center gap-2">
+                      <span>標的現況</span>
+                      {isAutoCallable(p) && status.koProgress && (
+                        <span className="text-sm text-amber-300 bg-amber-950/60 border border-amber-700 rounded-full px-2.5 py-1">
+                          {(isStepdown(p) ? stepdownModeOf(p) === "period_end_memory" : fcnModeOf(p) === "daily_memory") ? "曾於收盤達標" : isStepdown(p) ? "最近觀察日達標" : "今日收盤達標"}：{status.koProgress.hitCount}/{status.koProgress.total}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      {(p.underlyings || []).map((u, underlyingIndex) => {
+                        const lp = latestPriceFor(u.symbol, prices);
+                        const comparablePrice = lp ? comparableCloseFor(p, u, lp.date, prices) : null;
+                        const ratio = comparablePrice !== null ? (comparablePrice / Number(u.entryPrice)) * 100 : null;
+                        const lv = levelsFor(p, u);
+                        const splitFactor = lp ? splitFactorFor(p, u, lp.date, prices) : 1;
+                        const splitEvents = relevantSplitsFor(p, u, prices, lp?.date || "9999-12-31");
+                        const koHit = status.koProgress?.hits?.[underlyingIndex] || (isDailyStructure(p) ? koHitForUnderlying(p, u, prices) : null);
+                        return (
+                          <div key={u.id} className="bg-slate-950 rounded-xl px-4 py-3 border border-slate-800">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <span className="text-slate-100 text-lg">{u.name || u.symbol}</span>
+                                <span className="text-slate-400 ml-2 font-num text-sm">{u.symbol}</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-num text-sm">
+                                <span className="text-slate-400">進場 {u.entryPrice}</span>
+                                {lp ? (
+                                  <span className="text-slate-100">最新收盤 {fmtPrice(lp.price)}（{splitFactor !== 1 ? "拆股換算後 " : ""}{ratio.toFixed(1)}%）・{fmtDate(lp.date)}</span>
+                                ) : <span className="text-slate-400">尚無收盤價</span>}
+                                <button onClick={(e) => { e.stopPropagation(); setManualInputFor(u.symbol); setManualValue(lp ? String(lp.price) : ""); }}
+                                  className="text-amber-500 hover:text-amber-400"><IPencil size={12} /></button>
+                              </div>
+                            </div>
+                            {koHit && (
+                              <div className={`mt-2 text-sm font-medium ${koHit.hit ? "text-emerald-300" : "text-amber-300"}`}>
+                                {koHit.hit ? <ICheck size={14} /> : <IClock size={14} />} {koHit.rule}
+                                {koHit.hit && `：${fmtDate(koHit.date)}，收盤價 ${Number(koHit.price).toFixed(2)}`}
+                              </div>
+                            )}
+                            {splitEvents.length > 0 && (
+                              <div className="mt-2 rounded-lg border border-cyan-800 bg-cyan-950/50 px-3 py-2 text-sm text-cyan-100">
+                                <div className="font-medium">偵測到拆股，條件已自動換算</div>
+                                <div className="text-cyan-200/80 mt-1">
+                                  {splitEvents.map((event) => `${fmtDate(event.date)} ${event.ratio || `${event.numerator}:${event.denominator}`}`).join("、")}；請再與發行商／交易所通知核對。
+                                </div>
+                              </div>
+                            )}
+                            <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 pt-2 border-t border-slate-700 text-sm font-num text-slate-400">
+                              <span>初始KO價 <span className="text-slate-100">{lv.ko.toFixed(2)}</span></span>
+                              {splitFactor !== 1 && <span>目前換算KO價 <span className="text-cyan-200">{(lv.ko / splitFactor).toFixed(2)}</span></span>}
+                              <span>執行價 <span className="text-slate-100">{lv.strike.toFixed(2)}</span></span>
+                              {!isStepdown(p) && p.hasKi !== false && <span>KI價 <span className="text-slate-100">{lv.ki.toFixed(2)}</span></span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="text-sm text-slate-400 mb-4 bg-slate-950 rounded-lg px-3 py-2">
+                    所有出場與期末判斷都會等待各連結標的所屬市場收盤，並使用正式收盤價。{isStepdown(p) ? "Stepdown 到期時以執行價優先判斷。" : p.hasKi === false ? "本商品無 KI，到期以執行價判斷。" : "本商品有 KI，到期以期末收盤價對 KI 判斷。"}
+                  </div>
+                  </>}
+
+                  {p.notes && <div className="text-xs text-slate-500 mb-3">備註：{p.notes}</div>}
+
+                  <div className="flex items-center gap-3">
+                    {isCompletedStatus(status) && (
+                      p.completionConfirmed ? (
+                        <button onClick={(e) => { e.stopPropagation(); setCompletionConfirmation(p.id, false); }}
+                          className="text-xs text-slate-400 hover:text-slate-100 flex items-center gap-1">↩ 取消確認</button>
+                      ) : (
+                        <button onClick={(e) => { e.stopPropagation(); setCompletionConfirmation(p.id, true, status.key); }}
+                          className="text-xs text-emerald-300 hover:text-emerald-200 flex items-center gap-1"><ICheck size={12} /> 確認結案</button>
+                      )
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); setEditing(p); setShowForm(true); }}
+                      className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><IPencil size={12} /> 編輯</button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteProduct(p.id); }}
+                      className="text-xs text-rose-500 hover:text-rose-400 flex items-center gap-1"><ITrash size={12} /> 刪除</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {showForm && editing && (
+        <ProductForm product={editing} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={saveProduct} />
+      )}
+
+      {manualInputFor && (
+        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setManualInputFor(null)}>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm text-slate-300 mb-3">手動輸入 {manualInputFor} 當地交易日收盤價</div>
+            <input autoFocus type="number" step="0.01" value={manualValue} onChange={(e) => setManualValue(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-num mb-3" placeholder="例如 178.32" />
+            <div className="flex gap-2">
+              <button onClick={() => setManualInputFor(null)} className="flex-1 py-2 rounded-lg border border-slate-700 text-slate-400 text-sm">取消</button>
+              <button onClick={setManualPrice} className="flex-1 py-2 rounded-lg bg-amber-600 text-slate-950 text-sm font-medium">儲存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 text-slate-200 text-sm px-4 py-2 rounded-full shadow-lg z-50">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DashCard({ label, count, tone, icon: Icon, onClick, className = "" }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={className.includes("ring-2")}
+      className={`${className || ""} w-full text-left rounded-xl border px-3 py-3 ${toneClasses[tone]}`}>
+      <div className="flex items-center justify-between mb-1">
+        <Icon />
+        <span className="font-num text-3xl font-semibold">{count}</span>
+      </div>
+      <div className="text-sm opacity-90">{label}</div>
+    </button>
+  );
+}
+function PmCount({ label, count, tone }) {
+  return (
+    <div className={`rounded-lg border px-2 py-2 ${toneClasses[tone]}`}>
+      <div className="text-xl font-num font-semibold">{count}</div>
+      <div className="text-xs mt-0.5">{label}</div>
+    </div>
+  );
+}
+function PmResultGroup({ title, rows, tone }) {
+  return (
+    <div className={`rounded-xl border p-3 ${toneClasses[tone]}`}>
+      <div className="text-sm font-medium mb-2">{title}（{rows.length}）</div>
+      <div className="space-y-1">
+        {rows.map((row, index) => <div key={`${row}-${index}`} className="rounded-md bg-black/20 px-2.5 py-1.5 text-sm font-num">{row}</div>)}
+      </div>
+    </div>
+  );
+}
+function Field({ label, value }) {
+  return (
+    <div>
+      <div className="text-slate-400 mb-1">{label}</div>
+      <div className="text-slate-100 font-num">{value}</div>
+    </div>
+  );
+}
+
+function ProductForm({ product, onCancel, onSave }) {
+  const [p, setP] = useState(() => {
+    const tenor = Math.min(12, Math.max(2, Number(product.tenorMonths) || 6));
+    const existingObservations = product.observationDates || [];
+    const allowedStructure = STRUCTURES.some(([key]) => key === (product.structure || "FCN")) ? (product.structure || "FCN") : "FCN";
+    return {
+      ...product,
+      structure: allowedStructure,
+      documentStatus: product.documentStatus || ((product.underlyings || []).some((u) => u.symbol) ? "complete" : "pending"),
+      clients: (product.clients || [emptyClient(product.currency || "USD")]).map((client) => ({ ...client, currency: client.currency || product.currency || "USD" })),
+      underlyings: product.underlyings || [emptyUnderlying()],
+      hasKi: product.hasKi !== false,
+      tenorMonths: tenor,
+      observationDates: Array.from({ length: tenor }, (_, index) => existingObservations[index] || { id: uid(), date: "" }),
+    };
+  });
+  const update = (k, v) => setP((prev) => ({ ...prev, [k]: v }));
+
+  const updateClient = (id, k, v) => setP((prev) => ({ ...prev, clients: prev.clients.map((c) => (c.id === id ? { ...c, [k]: v } : c)) }));
+  const addClient = () => setP((prev) => ({ ...prev, clients: [...prev.clients, emptyClient(prev.currency || "USD")] }));
+  const removeClient = (id) => setP((prev) => ({ ...prev, clients: prev.clients.filter((c) => c.id !== id) }));
+
+  const updateUnderlying = (id, k, v) => setP((prev) => ({ ...prev, underlyings: prev.underlyings.map((u) => (u.id === id ? { ...u, [k]: v } : u)) }));
+  const addUnderlying = () => setP((prev) => ({ ...prev, underlyings: [...prev.underlyings, emptyUnderlying()] }));
+  const removeUnderlying = (id) => setP((prev) => ({ ...prev, underlyings: prev.underlyings.filter((u) => u.id !== id) }));
+  const updateTenor = (value) => setP((prev) => {
+    const tenor = Math.min(12, Math.max(2, Number(value) || 2));
+    const current = prev.observationDates || [];
+    return { ...prev, tenorMonths: tenor, observationDates: Array.from({ length: tenor }, (_, index) => current[index] || { id: uid(), date: "" }) };
+  });
+  const updateObservation = (index, date) => setP((prev) => ({
+    ...prev,
+    observationDates: prev.observationDates.map((obs, obsIndex) => obsIndex === index ? { ...obs, date } : obs),
+  }));
+
+  const basicReady = p.code && p.clients.length > 0 && p.clients.every((c) => c.name && c.amount && c.currency);
+  const fullReady = basicReady
+    && p.finalValuationDate
+    && (p.underlyings || []).length > 0
+    && p.underlyings.every((u) => u.symbol && u.entryPrice)
+    && (isStepdown(p) ? observationSchedule(p).length === Number(p.tenorMonths) && observationSchedule(p).every((obs) => obs.date) : p.startObsDate)
+    && (structureOf(p) !== "EXPRESS_FCN" || p.firstMonthObsEnd);
+  const canSave = p.documentStatus === "pending" ? basicReady : fullReady;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900">
+          <div className="font-display text-lg text-slate-100 italic">{product.code ? "編輯產品" : "新增產品"}</div>
+          <button onClick={onCancel}><IX2 size={18} className="text-slate-500" /></button>
+        </div>
+
+        <div className="p-5 space-y-4 text-sm">
+          <label className="block rounded-xl border border-amber-800 bg-amber-950/30 p-3">
+            <div className="text-sm text-amber-100 mb-1.5">資料狀態</div>
+            <select value={p.documentStatus} onChange={(e) => update("documentStatus", e.target.value)}
+              className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
+              <option value="pending">等待最終文件｜先記商品代號、客戶與金額</option>
+              <option value="complete">最終文件已收到｜輸入完整條款</option>
+            </select>
+          </label>
+
+          <Row2>
+            <TextInput label="產品代號" value={p.code} onChange={(v) => update("code", v)} />
+            <label className="block">
+              <div className="text-sm text-slate-400 mb-1">商品幣別</div>
+              <select value={p.currency} onChange={(e) => update("currency", e.target.value)}
+                className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num">
+                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          </Row2>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm text-slate-300">客戶、投入金額與客戶使用幣別</div>
+              <button onClick={addClient} className="text-sm text-amber-400 flex items-center gap-1"><IPlus size={14} />新增客戶</button>
+            </div>
+            <div className="space-y-2">
+              {p.clients.map((c) => (
+                <div key={c.id} className="grid grid-cols-12 gap-2 rounded-lg border border-slate-800 p-2">
+                  <input placeholder="客戶姓名" value={c.name} onChange={(e) => updateClient(c.id, "name", e.target.value)}
+                    className="col-span-12 sm:col-span-5 bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base" />
+                  <input placeholder="投入金額" type="number" value={c.amount} onChange={(e) => updateClient(c.id, "amount", e.target.value)}
+                    className="col-span-7 sm:col-span-4 bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num" />
+                  <select value={c.currency || p.currency} onChange={(e) => updateClient(c.id, "currency", e.target.value)}
+                    className="col-span-4 sm:col-span-2 bg-slate-950 border border-slate-600 rounded-lg px-2 py-2.5 text-slate-100 text-base font-num">
+                    {CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                  </select>
+                  {p.clients.length > 1 && <button onClick={() => removeClient(c.id)} className="col-span-1 text-rose-400"><ITrash size={16} /></button>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <TextInput label="交易日" type="date" value={p.tradeDate || ""} onChange={(v) => update("tradeDate", v)} />
+
+          {p.documentStatus === "pending" && (
+            <div className="rounded-xl border border-amber-800 bg-amber-950/30 px-4 py-3 text-sm text-amber-100">
+              目前先存為「待補最終文件」。收到文件後再回來編輯，就能填商品架構、觀察日與連結標的。
+            </div>
+          )}
+
+          {p.documentStatus === "complete" && <>
+          <label className="block">
+            <div className="text-sm text-slate-300 mb-1">產品架構</div>
+            <select value={p.structure || "FCN"} onChange={(e) => update("structure", e.target.value)}
+              className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base">
+              {STRUCTURES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+            <div className="text-sm text-slate-400 mt-1.5">{STRUCTURES.find(([key]) => key === (p.structure || "FCN"))?.[2]}</div>
+          </label>
+
+          {isDailyStructure(p) && (
+            <label className="block bg-amber-950/30 border border-amber-800/70 rounded-xl p-3">
+              <div className="text-base text-amber-100 mb-1">{structureLabel(p)} 出場模式</div>
+              <select value={fcnModeOf(p)} onChange={(e) => update("fcnMode", e.target.value)}
+                className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
+                <option value="daily_memory">Daily Memory｜各標的曾於收盤達 KO 即保留</option>
+                <option value="daily">Daily｜所有標的必須同一天收盤達 KO</option>
+              </select>
+              <div className="text-sm text-amber-100/80 mt-2">一律使用開始比價日後的正式收盤價，不使用盤中最高價。</div>
+            </label>
+          )}
+
+          {isStepdown(p) && (
+            <label className="block bg-amber-950/30 border border-amber-800/70 rounded-xl p-3">
+              <div className="text-base text-amber-100 mb-1">Stepdown 出場模式</div>
+              <select value={stepdownModeOf(p)} onChange={(e) => update("stepdownMode", e.target.value)}
+                className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
+                <option value="period_end">Period End｜同一觀察日所有標的同時達標</option>
+                <option value="period_end_memory">Period End Memory｜各標的曾於觀察日達標即保留</option>
+              </select>
+            </label>
+          )}
+
+          <Row2>
+            <TextInput label="年化配息 %" type="number" value={p.couponRate || ""} onChange={(v) => update("couponRate", v)} />
+            <label className="block">
+              <div className="text-sm text-slate-400 mb-1">商品年限（月）</div>
+              <select value={p.tenorMonths} onChange={(e) => updateTenor(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num">
+                {Array.from({ length: 11 }, (_, index) => index + 2).map((month) => <option key={month} value={month}>{month} 個月</option>)}
+              </select>
+            </label>
+          </Row2>
+
+          {!isStepdown(p) && (
+            <TextInput label="開始比價日" type="date" value={p.startObsDate || ""} onChange={(v) => update("startObsDate", v)} />
+          )}
+          <TextInput label="期末評價日／到期日" type="date" value={p.finalValuationDate || ""} onChange={(v) => update("finalValuationDate", v)} />
+
+          {structureOf(p) === "EXPRESS_FCN" && (
+            <div className="space-y-2 rounded-xl border border-slate-700 p-3">
+              <div className="text-sm text-slate-300">Express FCN 首月設定</div>
+              <div className="text-sm text-slate-400">「開始比價日」請填發行日隔天；首月內達到上方提前出場條件時，狀態會標示為首月提前出場。</div>
+              <TextInput label="第一個月觀察日結束" type="date" value={p.firstMonthObsEnd || ""} onChange={(v) => update("firstMonthObsEnd", v)} />
+            </div>
+          )}
+
+          <Row2>
+            <TextInput label="執行價 %" type="number" value={p.strikePct} onChange={(v) => update("strikePct", v)} />
+            <TextInput label="提前出場 %" type="number" value={p.autocallPct} onChange={(v) => update("autocallPct", v)} />
+          </Row2>
+
+          {isStepdown(p) && <>
+            <TextInput label="每月提前出場下降 %" type="number" value={p.stepDownPct || ""} onChange={(v) => update("stepDownPct", v)} />
+            <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+              <div className="text-base text-slate-100">每月觀察日與提前出場門檻</div>
+              <div className="text-sm text-slate-400 mt-1 mb-3">日期請照最終文件輸入，系統不自行推算假日；每次會等待各標的市場收盤。</div>
+              <div className="space-y-2">
+                {observationSchedule(p).map((obs) => (
+                  <label key={obs.id} className="grid grid-cols-12 items-center gap-2 rounded-lg bg-slate-900 p-2">
+                    <span className="col-span-3 text-sm text-slate-300">第 {obs.index + 1} 月</span>
+                    <input type="date" value={obs.date} onChange={(e) => updateObservation(obs.index, e.target.value)}
+                      className="col-span-6 bg-slate-950 border border-slate-600 rounded-lg px-2 py-2 text-slate-100 text-sm font-num" />
+                    <span className="col-span-3 text-right text-base text-amber-300 font-num">{obs.thresholdPct}%</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>}
+
+          {!isStepdown(p) && <>
+            <label className="block">
+              <div className="text-sm text-slate-400 mb-1">期末判斷方式</div>
+              <select value={p.hasKi === false ? "no_ki" : "ki"} onChange={(e) => update("hasKi", e.target.value === "ki")}
+                className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base">
+                <option value="ki">有 KI｜期末收盤價以 KI 判斷</option>
+                <option value="no_ki">無 KI｜期末收盤價以執行價判斷</option>
+              </select>
+            </label>
+            {p.hasKi !== false && <TextInput label="下限價 KI %" type="number" value={p.kiPct} onChange={(v) => update("kiPct", v)} />}
+          </>}
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm text-slate-300">連結標的</div>
+              <button onClick={addUnderlying} className="text-sm text-amber-400 flex items-center gap-1"><IPlus size={14} />新增標的</button>
+            </div>
+            <div className="space-y-2">
+              {p.underlyings.map((u) => (
+                <div key={u.id} className="border border-slate-800 rounded-lg p-3 space-y-2">
+                  <div className="flex gap-2">
+                    <input placeholder="名稱（如 台積電ADR）" value={u.name} onChange={(e) => updateUnderlying(u.id, "name", e.target.value)}
+                      className="flex-1 bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base" />
+                    {p.underlyings.length > 1 && <button onClick={() => removeUnderlying(u.id)} className="text-rose-500"><ITrash size={14} /></button>}
+                  </div>
+                  <div className="flex gap-2">
+                    <input placeholder="查價代碼（如 TSLA、8035JT 或 8035）" value={u.symbol} onChange={(e) => updateUnderlying(u.id, "symbol", e.target.value)}
+                      className="flex-1 bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num" />
+                    <input placeholder="進場股價" type="number" value={u.entryPrice} onChange={(e) => updateUnderlying(u.id, "entryPrice", e.target.value)}
+                      className="w-32 bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {structureOf(p) === "DAC" && <div className="rounded-lg bg-slate-950 px-3 py-2 text-sm text-slate-400">DAC 依每日收盤價追蹤出場；未達執行價的無息日不在本台帳計算利息。</div>}
+          </>}
+
+          <TextInput label="備註" value={p.notes || ""} onChange={(v) => update("notes", v)} />
+        </div>
+
+        <div className="flex gap-2 px-5 py-4 border-t border-slate-800 sticky bottom-0 bg-slate-900">
+          <button onClick={onCancel} className="flex-1 py-2.5 rounded-lg border border-slate-700 text-slate-400">取消</button>
+          <button disabled={!canSave} onClick={() => onSave(p)}
+            className="flex-1 py-2.5 rounded-lg bg-amber-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-medium">儲存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row2({ children }) { return <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{children}</div>; }
+function TextInput({ label, value, onChange, type = "text", placeholder }) {
+  return (
+    <label className="block">
+      <div className="text-sm text-slate-400 mb-1">{label}</div>
+      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num" />
+    </label>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
