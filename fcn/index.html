@@ -308,9 +308,15 @@ function recordClose(value) {
   const number = Number(price);
   return Number.isFinite(number) ? number : null;
 }
+function isWeekendDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return false;
+  const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
+}
 function trustedCloseForDate(value, date, symbol = "") {
   const close = recordClose(value);
   if (close === null) return null;
+  if (isWeekendDate(date)) return null;
   // A dated value cannot be an official close until that symbol's own market
   // has closed. Intl time zones handle US/Australian daylight saving changes.
   if (symbol && !isMarketCloseReadyForSymbol(symbol, date)) return null;
@@ -321,7 +327,8 @@ function trustedCloseForDate(value, date, symbol = "") {
   // a pre-market daily candle as official. A refresh with the new function
   // replaces them with a versioned completed-close record.
   if (isObject && value.officialClose === true) {
-    return value.closeVerification === "completed-daily-v2" ? close : null;
+    if (date < "2026-09-08") return close;
+    return value.closeVerification === "completed-daily-v3" ? close : null;
   }
   if (age >= 0 && age <= 2) return null;
   return close;
@@ -660,7 +667,7 @@ function App() {
     results.forEach((r) => {
       if (r.status === "fulfilled") {
         const { raw, symbol, quote } = r.value;
-        if (quote.closeVerification !== "completed-daily-v2") {
+        if (quote.closeVerification !== "completed-daily-v3") {
           failCount += 1;
           return;
         }
@@ -813,7 +820,10 @@ function App() {
           <div>
             <div className="text-xs tracking-widest text-amber-500/80 uppercase mb-1 font-num">Structured Notes Ledger</div>
             <h1 className="font-display text-3xl text-slate-50 italic">FCN 追蹤台帳</h1>
-            <div className="text-sm text-slate-500 mt-1 font-num">{fmtDate(todayISO())}</div>
+            <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500 mt-1 font-num">
+              <span>{fmtDate(todayISO())}</span>
+              <span className="rounded-full border border-cyan-800 bg-cyan-950 px-2 py-0.5 text-xs text-cyan-300">修正版 C</span>
+            </div>
           </div>
           <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
             className="flex items-center gap-2 bg-amber-600 hover:bg-amber-500 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-medium px-3 py-2.5 rounded-lg shrink-0">

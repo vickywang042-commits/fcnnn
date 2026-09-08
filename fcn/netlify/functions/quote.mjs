@@ -27,6 +27,54 @@ function dateInTimeZone(date, timeZone) {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+function clockInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const get = (type) => parts.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    minutes: Number(get("hour")) * 60 + Number(get("minute"))
+  };
+}
+
+function fallbackCloseMinutes(timeZone) {
+  const closeTimes = {
+    "Asia/Tokyo": 15 * 60 + 45,
+    "Australia/Sydney": 16 * 60 + 20,
+    "Asia/Hong_Kong": 16 * 60 + 15,
+    "Asia/Taipei": 13 * 60 + 45,
+    "Asia/Singapore": 17 * 60 + 15,
+    "Asia/Seoul": 15 * 60 + 45,
+    "Asia/Kolkata": 15 * 60 + 45,
+    "Europe/London": 16 * 60 + 45,
+    "Europe/Paris": 17 * 60 + 45,
+    "Europe/Berlin": 17 * 60 + 45,
+    "Europe/Zurich": 17 * 60 + 45,
+    "America/Toronto": 16 * 60 + 15,
+    "America/New_York": 16 * 60 + 15
+  };
+  return closeTimes[timeZone] ?? 16 * 60 + 15;
+}
+
+function isCompletedDailyCloseReady(meta, now = new Date()) {
+  const timeZone = meta.exchangeTimezoneName || "America/New_York";
+  const regularEndSeconds = Number(meta.currentTradingPeriod?.regular?.end);
+  if (Number.isFinite(regularEndSeconds) && regularEndSeconds > 0) {
+    const regularEnd = new Date(regularEndSeconds * 1000);
+    if (dateInTimeZone(regularEnd, timeZone) === dateInTimeZone(now, timeZone)) {
+      return now.getTime() >= regularEnd.getTime() + 15 * 60 * 1000;
+    }
+  }
+  return clockInTimeZone(now, timeZone).minutes >= fallbackCloseMinutes(timeZone);
+}
+
 export default async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
 
@@ -57,21 +105,26 @@ export default async (request) => {
     const closes = quote.close || [];
     const highs = quote.high || [];
     const timestamps = result?.timestamp || [];
+    const exchangeTimeZone = meta.exchangeTimezoneName || "America/New_York";
     let history = timestamps.map((timestamp, index) => {
       const close = Number(closes[index]);
       const high = Number(highs[index]);
       if (!Number.isFinite(close) || close <= 0) return null;
+      const date = dateInTimeZone(new Date(timestamp * 1000), exchangeTimeZone);
+      const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+      if (weekday === 0 || weekday === 6) return null;
       return {
-        date: new Date(timestamp * 1000).toISOString().slice(0, 10),
+        date,
         price: close,
         high: Number.isFinite(high) && high > 0 ? high : close
       };
     }).filter(Boolean);
 
-    // Yahoo's daily chart contains a still-moving daily candle while that
-    // exchange is open. It is not an official close and must not trigger KO.
-    const exchangeToday = dateInTimeZone(new Date(), meta.exchangeTimezoneName || "America/New_York");
-    if (["PRE", "PREPRE", "REGULAR"].includes(meta.marketState) && history.at(-1)?.date === exchangeToday) history = history.slice(0, -1);
+    // Yahoo can omit marketState even while the exchange is open. Its daily
+    // chart still contains a moving candle, so use the official session end
+    // timestamp (plus a short settlement buffer) instead.
+    const exchangeToday = dateInTimeZone(new Date(), exchangeTimeZone);
+    if (history.at(-1)?.date === exchangeToday && !isCompletedDailyCloseReady(meta)) history = history.slice(0, -1);
 
     const splits = Object.values(result?.events?.splits || {}).map((event) => {
       const numerator = Number(event?.numerator);
@@ -90,7 +143,7 @@ export default async (request) => {
     const price = latest?.price;
     if (!price) throw new Error("No completed daily close");
 
-    return respond(200, { symbol, price, date: latest.date, history, splits, source: "Yahoo Finance daily close", closeVerification: "completed-daily-v2" });
+    return respond(200, { symbol, price, date: latest.date, history, splits, source: "Yahoo Finance daily close", closeVerification: "completed-daily-v3" });
   } catch (error) {
     console.error("Quote lookup failed", symbol, error.message);
     return respond(502, { error: "Quote lookup failed" });
