@@ -421,14 +421,30 @@ function isDailyStructure(p) { return ["FCN", "DAC", "EXPRESS_FCN"].includes(str
 function isAutoCallable(p) { return isDailyStructure(p) || isStepdown(p); }
 function fcnModeOf(p) { return p.fcnMode || "daily"; }
 function stepdownModeOf(p) { return p.stepdownMode || "period_end"; }
+function kiTypeOf(p) {
+  const type = String(p.kiType || "").toUpperCase();
+  if (["EKI", "AKI", "NONE"].includes(type)) return type;
+  return p.hasKi === false ? "NONE" : "EKI";
+}
+function guaranteedCouponMonthsOf(p) {
+  const value = Number(p.guaranteedCouponMonths);
+  const tenor = Math.min(12, Math.max(1, Number(p.tenorMonths) || 12));
+  return Number.isFinite(value) && value >= 1 ? Math.min(tenor, Math.floor(value)) : 1;
+}
+function stepdownObservationCount(p) {
+  const tenor = Math.min(12, Math.max(1, Number(p.tenorMonths) || (p.observationDates || []).length || 1));
+  return Math.max(1, tenor - guaranteedCouponMonthsOf(p) + 1);
+}
 function observationThresholdPct(p, index) {
-  return Math.max(0, (Number(p.autocallPct) || 0) - (Number(p.stepDownPct) || 0) * index);
+  const elapsedStep = guaranteedCouponMonthsOf(p) - 1 + index;
+  return Math.max(0, (Number(p.autocallPct) || 0) - (Number(p.stepDownPct) || 0) * elapsedStep);
 }
 function observationSchedule(p) {
-  return (p.observationDates || []).map((item, index) => ({
+  return (p.observationDates || []).slice(0, stepdownObservationCount(p)).map((item, index) => ({
     id: item.id || `${p.id || "p"}-${index}`,
     date: item.date || "",
     index,
+    monthNumber: guaranteedCouponMonthsOf(p) + index,
     thresholdPct: observationThresholdPct(p, index),
   }));
 }
@@ -507,15 +523,42 @@ function stepdownKoProgress(p, prices, today = todayISO()) {
 function koProgressFor(p, prices, today = todayISO()) {
   return isStepdown(p) ? stepdownKoProgress(p, prices, today) : dailyKoProgress(p, prices, today);
 }
+function akiHitForUnderlying(p, u, prices) {
+  const start = p.tradeDate || trackingStartOf(p);
+  const maturity = maturityOf(p);
+  const threshold = levelsFor(p, u).ki;
+  const hist = historyFor(u.symbol, prices);
+  const dates = Object.keys(hist).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= start && date <= maturity).sort();
+  const hitDate = dates.find((date) => {
+    const comparableClose = comparableCloseFor(p, u, date, prices);
+    return comparableClose !== null && comparableClose < threshold;
+  });
+  return hitDate
+    ? { hit: true, date: hitDate, price: trustedCloseForDate(hist[hitDate], hitDate, u.symbol), comparablePrice: comparableCloseFor(p, u, hitDate, prices) }
+    : { hit: false, date: null, price: null, comparablePrice: null };
+}
+function akiProgress(p, prices) {
+  const hits = (p.underlyings || []).map((u) => akiHitForUnderlying(p, u, prices));
+  return { triggered: hits.some((hit) => hit.hit), hits };
+}
 function maturityOutcome(p, prices) {
   const maturity = maturityOf(p);
   const underlyings = p.underlyings || [];
   const finalPrices = underlyings.map((u) => trustedCloseForDate(historyFor(u.symbol, prices)[maturity], maturity, u.symbol));
   const comparablePrices = underlyings.map((u) => comparableCloseFor(p, u, maturity, prices));
   if (underlyings.length === 0 || finalPrices.some((price) => price === null)) return { ready: false, shares: false };
-  const boundaryPct = isStepdown(p) || p.hasKi === false ? Number(p.strikePct) || 0 : Number(p.kiPct) || 0;
-  const shares = underlyings.some((u, index) => comparablePrices[index] < (Number(u.entryPrice) || 0) * boundaryPct / 100);
-  return { ready: true, shares, boundaryPct, finalPrices, comparablePrices };
+  const kiType = kiTypeOf(p);
+  const strikePct = Number(p.strikePct) || 0;
+  const kiPct = Number(p.kiPct) || 0;
+  const finalBelow = (boundaryPct) => underlyings.some((u, index) => comparablePrices[index] < (Number(u.entryPrice) || 0) * boundaryPct / 100);
+  if (isStepdown(p) || kiType === "NONE") {
+    return { ready: true, shares: finalBelow(strikePct), boundaryPct: strikePct, finalPrices, comparablePrices, kiType: isStepdown(p) ? "NONE" : kiType };
+  }
+  if (kiType === "EKI") {
+    return { ready: true, shares: finalBelow(kiPct), boundaryPct: kiPct, finalPrices, comparablePrices, kiType };
+  }
+  const aki = akiProgress(p, prices);
+  return { ready: true, shares: aki.triggered && finalBelow(strikePct), boundaryPct: strikePct, finalPrices, comparablePrices, kiType, aki };
 }
 const completedStatusMeta = {
   called: { label: "提前出場", tone: "success" },
@@ -595,8 +638,8 @@ const emptyProduct = () => ({
   id: uid(), code: "", currency: "USD", structure: "FCN", fcnMode: "daily_memory", stepdownMode: "period_end",
   documentStatus: "pending", clients: [emptyClient("USD")],
   tradeDate: todayISO(),
-  tenorMonths: 6, startObsDate: "", finalValuationDate: "",
-  couponRate: "", strikePct: 100, autocallPct: 100, stepDownPct: 5, hasKi: true, kiPct: 70,
+  tenorMonths: 6, guaranteedCouponMonths: 1, startObsDate: "", finalValuationDate: "",
+  couponRate: "", strikePct: 100, autocallPct: 100, stepDownPct: 5, hasKi: true, kiType: "EKI", kiPct: 70,
   firstMonthObsEnd: "", observationDates: Array.from({ length: 6 }, () => ({ id: uid(), date: "" })),
   underlyings: [emptyUnderlying()], notes: "",
 });
@@ -659,6 +702,42 @@ function comparePmReportWithClientProducts(reportEntries, statuses) {
     mismatches,
     ignoredCount: reportEntries.length - overlaps.length,
   };
+}
+function formatWanAmount(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "金額未填";
+  const wan = amount / 10000;
+  return `${wan.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}萬`;
+}
+function buildPmCopyText(items) {
+  const outcomeText = {
+    called: "今日提前到期",
+    matured_par: "今日到期保本",
+    matured_shares: "今日到期接股票",
+  };
+  return (items || []).map((item) => {
+    const product = item.p;
+    const clients = (product.clients || []).map((client) => {
+      const currency = String(client.currency || product.currency || "USD").toUpperCase();
+      const currencyNote = currency !== "USD" ? `（${currency}）` : "";
+      return `${client.name || "客戶未填"} ${formatWanAmount(client.amount)}${currencyNote}`;
+    });
+    const clientText = clients.length > 0 ? clients.join(" ") : "客戶未填";
+    return `${outcomeText[item.expectedStatus] || "今日結果待確認"} ${normalizeProductCode(product.code)}（${structureLabel(product)}） ${clientText}`;
+  }).join("\n");
+}
+function fallbackCopyText(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return copied;
 }
 function isOneUnderlyingFromCall(status) {
   const progress = status?.koProgress;
@@ -817,6 +896,19 @@ function App() {
     if (reportEntries.length === 0) return null;
     return comparePmReportWithClientProducts(reportEntries, statuses);
   }, [pmReportText, statuses]);
+  const pmCopyText = useMemo(() => buildPmCopyText(pmComparison?.consistent || []), [pmComparison]);
+  const copyPmResult = async () => {
+    if (!pmCopyText) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(pmCopyText);
+      else if (!fallbackCopyText(pmCopyText)) throw new Error("copy failed");
+      showToast("今日回報格式已複製");
+    } catch (error) {
+      let copied = false;
+      try { copied = fallbackCopyText(pmCopyText); } catch (_) {}
+      showToast(copied ? "今日回報格式已複製" : "複製失敗，請長按文字複製");
+    }
+  };
 
   const buckets = useMemo(() => {
     const unconfirmed = (key) => statuses.filter((s) => s.status.key === key && !s.p.completionConfirmed);
@@ -954,6 +1046,18 @@ function App() {
                 <PmResultGroup title="PM 與系統一致" tone="success"
                   rows={pmComparison.consistent.map((item) => `${item.code}｜${item.label}`)} />
               )}
+              {pmCopyText && (
+                <div className="rounded-xl border border-cyan-800 bg-cyan-950/30 p-3.5">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="font-medium text-cyan-100">今日主管回報格式</div>
+                    <button type="button" onClick={copyPmResult}
+                      className="shrink-0 rounded-lg bg-cyan-300 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-cyan-200">
+                      一鍵複製
+                    </button>
+                  </div>
+                  <pre className="whitespace-pre-wrap break-words rounded-lg bg-slate-950/70 px-3 py-2.5 text-sm leading-relaxed text-slate-100 font-body">{pmCopyText}</pre>
+                </div>
+              )}
               {pmComparison.overlaps.length === 0 && (
                 <div className="rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">這份 PM 清單沒有與妳目前的客戶商品重複。</div>
               )}
@@ -972,15 +1076,15 @@ function App() {
           )}
           {sortedStatuses.map(({ p, status }) => (
             <div key={p.id} className="product-card border rounded-2xl overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-4 cursor-pointer"
+              <div className="flex flex-col gap-3 px-4 py-4 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
                 onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
-                <div className="min-w-0">
-                  <div className="font-medium text-lg text-slate-50 truncate">{p.code || "未命名產品"}</div>
-                  <div className="text-sm text-slate-400 truncate">
+                <div className="w-full min-w-0 sm:w-auto">
+                  <div className="font-medium text-xl text-slate-50 break-words font-num">{p.code || "未命名產品"}</div>
+                  <div className="text-sm text-slate-400 break-words mt-0.5">
                     {structureLabel(p)} ・ {(p.clients || []).map((c) => c.name).filter(Boolean).join("、") || "—"}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
                   <span className={`px-3 py-1.5 rounded-full text-sm border font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
                   {p.completionConfirmed && (
                     <span className="px-2.5 py-1.5 rounded-full text-xs border border-slate-600 bg-slate-800 text-slate-300">已確認結案</span>
@@ -989,7 +1093,7 @@ function App() {
                     <span className="px-2.5 py-1.5 rounded-full text-xs border border-cyan-700 bg-cyan-950 text-cyan-200">拆股已換算</span>
                   )}
                   {status.key === "live" && <span className="text-sm text-slate-400 font-num hidden sm:inline">{status.daysToMaturity}天後到期</span>}
-                  {expanded[p.id] ? <IChevUp className="text-slate-500" /> : <IChevDown className="text-slate-500" />}
+                  <span className="ml-auto sm:ml-0">{expanded[p.id] ? <IChevUp className="text-slate-500" /> : <IChevDown className="text-slate-500" />}</span>
                 </div>
               </div>
 
@@ -1026,9 +1130,10 @@ function App() {
                     <Field label="開始比價日" value={p.startObsDate ? fmtDate(p.startObsDate) : (isStepdown(p) ? "見觀察日" : "—")} />
                     <Field label="期末評價日" value={fmtDate(maturityOf(p))} />
                     <Field label="年化配息" value={p.couponRate ? `${p.couponRate}%` : "—"} />
+                    <Field label="保證領息" value={`${guaranteedCouponMonthsOf(p)} 個月`} />
                     <Field label="執行價" value={`${p.strikePct}%`} />
                     <Field label="出場價" value={`${p.autocallPct}%`} />
-                    <Field label="期末判斷" value={isStepdown(p) || p.hasKi === false ? `執行價 ${p.strikePct}%` : `KI ${p.kiPct}%`} />
+                    <Field label="期末判斷" value={isStepdown(p) ? `執行價 ${p.strikePct}%` : kiTypeOf(p) === "NONE" ? "None" : `${kiTypeOf(p)} ${p.kiPct}%`} />
                     {isStepdown(p) && <Field label="每月步階下降" value={`${p.stepDownPct || 0}%`} />}
                     {structureOf(p) === "EXPRESS_FCN" && <Field label="首月觀察結束" value={p.firstMonthObsEnd ? fmtDate(p.firstMonthObsEnd) : "—"} />}
                   </div>
@@ -1040,7 +1145,7 @@ function App() {
                         {observationSchedule(p).map((obs) => {
                           const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
                           return <div key={obs.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-sm">
-                            <span>第 {obs.index + 1} 月・{obs.date ? fmtDate(obs.date) : "未填日期"}</span>
+                            <span>第 {obs.monthNumber} 月・{obs.date ? fmtDate(obs.date) : "未填日期"}</span>
                             <span className={check?.complete ? "text-emerald-300" : "text-amber-300"}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 全數達標" : "已比價") : ""}</span>
                           </div>;
                         })}
@@ -1066,6 +1171,7 @@ function App() {
                         const splitFactor = lp ? splitFactorFor(p, u, lp.date, prices) : 1;
                         const splitEvents = relevantSplitsFor(p, u, prices, lp?.date || "9999-12-31");
                         const koHit = status.koProgress?.hits?.[underlyingIndex] || (isDailyStructure(p) ? koHitForUnderlying(p, u, prices) : null);
+                        const akiHit = !isStepdown(p) && kiTypeOf(p) === "AKI" ? akiHitForUnderlying(p, u, prices) : null;
                         return (
                           <div key={u.id} className="bg-slate-950 rounded-xl px-4 py-3 border border-slate-800">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1088,6 +1194,11 @@ function App() {
                                 {koHit.hit && `：${fmtDate(koHit.date)}，收盤價 ${Number(koHit.price).toFixed(2)}`}
                               </div>
                             )}
+                            {akiHit && (
+                              <div className={`mt-2 text-sm font-medium ${akiHit.hit ? "text-rose-300" : "text-slate-400"}`}>
+                                {akiHit.hit ? <IWarn size={14} /> : <ICheck size={14} />} AKI {akiHit.hit ? `已觸發：${fmtDate(akiHit.date)}，收盤價 ${fmtPrice(akiHit.price)}` : "尚未觸發"}
+                              </div>
+                            )}
                             {splitEvents.length > 0 && (
                               <div className="mt-2 rounded-lg border border-cyan-800 bg-cyan-950/50 px-3 py-2 text-sm text-cyan-100">
                                 <div className="font-medium">偵測到拆股，條件已自動換算</div>
@@ -1100,7 +1211,7 @@ function App() {
                               <span>初始KO價 <span className="text-slate-100">{lv.ko.toFixed(2)}</span></span>
                               {splitFactor !== 1 && <span>目前換算KO價 <span className="text-cyan-200">{(lv.ko / splitFactor).toFixed(2)}</span></span>}
                               <span>執行價 <span className="text-slate-100">{lv.strike.toFixed(2)}</span></span>
-                              {!isStepdown(p) && p.hasKi !== false && <span>KI價 <span className="text-slate-100">{lv.ki.toFixed(2)}</span></span>}
+                              {!isStepdown(p) && kiTypeOf(p) !== "NONE" && <span>{kiTypeOf(p)}價 <span className="text-slate-100">{lv.ki.toFixed(2)}</span></span>}
                             </div>
                           </div>
                         );
@@ -1108,8 +1219,8 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="text-sm text-slate-400 mb-4 bg-slate-950 rounded-lg px-3 py-2">
-                    所有出場與期末判斷都會等待各連結標的所屬市場收盤，並使用正式收盤價。{isStepdown(p) ? "Stepdown 到期時以執行價優先判斷。" : p.hasKi === false ? "本商品無 KI，到期以執行價判斷。" : "本商品有 KI，到期以期末收盤價對 KI 判斷。"}
+                  <div className="text-sm text-slate-400 mb-4 bg-slate-950 rounded-lg px-3 py-2 leading-relaxed">
+                    收盤時間依連結標的市場判斷，與商品幣別、客戶幣別無關。{isStepdown(p) ? " Stepdown 期末看執行價。" : kiTypeOf(p) === "EKI" ? " EKI 只看期末比價日。" : kiTypeOf(p) === "AKI" ? " AKI 監測交易日至期末比價日。" : " None 期末看執行價。"}
                   </div>
                   </>}
 
@@ -1214,8 +1325,10 @@ function ProductForm({ product, onCancel, onSave }) {
       documentStatus: product.documentStatus || ((product.underlyings || []).some((u) => u.symbol) ? "complete" : "pending"),
       clients: (product.clients || [emptyClient(product.currency || "USD")]).map((client) => ({ ...client, currency: client.currency || product.currency || "USD" })),
       underlyings: product.underlyings || [emptyUnderlying()],
-      hasKi: product.hasKi !== false,
+      hasKi: kiTypeOf(product) !== "NONE",
+      kiType: kiTypeOf(product),
       tenorMonths: tenor,
+      guaranteedCouponMonths: guaranteedCouponMonthsOf(product),
       observationDates: Array.from({ length: tenor }, (_, index) => existingObservations[index] || { id: uid(), date: "" }),
     };
   });
@@ -1243,7 +1356,7 @@ function ProductForm({ product, onCancel, onSave }) {
     && p.finalValuationDate
     && (p.underlyings || []).length > 0
     && p.underlyings.every((u) => u.symbol && u.entryPrice)
-    && (isStepdown(p) ? observationSchedule(p).length === Number(p.tenorMonths) && observationSchedule(p).every((obs) => obs.date) : p.startObsDate)
+    && (isStepdown(p) ? observationSchedule(p).every((obs) => obs.date) : p.startObsDate)
     && (structureOf(p) !== "EXPRESS_FCN" || p.firstMonthObsEnd);
   const canSave = p.documentStatus === "pending" ? basicReady : fullReady;
 
@@ -1260,8 +1373,8 @@ function ProductForm({ product, onCancel, onSave }) {
             <div className="text-sm text-amber-100 mb-1.5">資料狀態</div>
             <select value={p.documentStatus} onChange={(e) => update("documentStatus", e.target.value)}
               className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
-              <option value="pending">等待最終文件｜先記商品代號、客戶與金額</option>
-              <option value="complete">最終文件已收到｜輸入完整條款</option>
+              <option value="pending">等待最終文件</option>
+              <option value="complete">最終文件已收到</option>
             </select>
           </label>
 
@@ -1321,8 +1434,8 @@ function ProductForm({ product, onCancel, onSave }) {
               <div className="text-base text-amber-100 mb-1">{structureLabel(p)} 出場模式</div>
               <select value={fcnModeOf(p)} onChange={(e) => update("fcnMode", e.target.value)}
                 className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
-                <option value="daily_memory">Daily Memory｜各標的曾於收盤達 KO 即保留</option>
-                <option value="daily">Daily｜所有標的必須同一天收盤達 KO</option>
+                <option value="daily_memory">Daily Memory</option>
+                <option value="daily">Daily</option>
               </select>
               <div className="text-sm text-amber-100/80 mt-2">一律使用開始比價日後的正式收盤價，不使用盤中最高價。</div>
             </label>
@@ -1333,8 +1446,8 @@ function ProductForm({ product, onCancel, onSave }) {
               <div className="text-base text-amber-100 mb-1">Stepdown 出場模式</div>
               <select value={stepdownModeOf(p)} onChange={(e) => update("stepdownMode", e.target.value)}
                 className="w-full bg-slate-950 border border-amber-700 rounded-lg px-3 py-2.5 text-slate-100 text-base">
-                <option value="period_end">Period End｜同一觀察日所有標的同時達標</option>
-                <option value="period_end_memory">Period End Memory｜各標的曾於觀察日達標即保留</option>
+                <option value="period_end">Period End</option>
+                <option value="period_end_memory">Period End Memory</option>
               </select>
             </label>
           )}
@@ -1349,6 +1462,9 @@ function ProductForm({ product, onCancel, onSave }) {
               </select>
             </label>
           </Row2>
+
+          <TextInput label="保證領息月份" type="number" min="1" max={p.tenorMonths} step="1"
+            value={p.guaranteedCouponMonths} onChange={(v) => update("guaranteedCouponMonths", v)} />
 
           {!isStepdown(p) && (
             <TextInput label="開始比價日" type="date" value={p.startObsDate || ""} onChange={(v) => update("startObsDate", v)} />
@@ -1372,11 +1488,11 @@ function ProductForm({ product, onCancel, onSave }) {
             <TextInput label="每月提前出場下降 %" type="number" value={p.stepDownPct || ""} onChange={(v) => update("stepDownPct", v)} />
             <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
               <div className="text-base text-slate-100">每月觀察日與提前出場門檻</div>
-              <div className="text-sm text-slate-400 mt-1 mb-3">日期請照最終文件輸入，系統不自行推算假日；每次會等待各標的市場收盤。</div>
+              <div className="text-sm text-slate-400 mt-1 mb-3">日期照最終文件輸入；門檻從保證領息月份接續下降。</div>
               <div className="space-y-2">
                 {observationSchedule(p).map((obs) => (
                   <label key={obs.id} className="grid grid-cols-12 items-center gap-2 rounded-lg bg-slate-900 p-2">
-                    <span className="col-span-3 text-sm text-slate-300">第 {obs.index + 1} 月</span>
+                    <span className="col-span-3 text-sm text-slate-300">第 {obs.monthNumber} 月</span>
                     <input type="date" value={obs.date} onChange={(e) => updateObservation(obs.index, e.target.value)}
                       className="col-span-6 bg-slate-950 border border-slate-600 rounded-lg px-2 py-2 text-slate-100 text-sm font-num" />
                     <span className="col-span-3 text-right text-base text-amber-300 font-num">{obs.thresholdPct}%</span>
@@ -1388,14 +1504,15 @@ function ProductForm({ product, onCancel, onSave }) {
 
           {!isStepdown(p) && <>
             <label className="block">
-              <div className="text-sm text-slate-400 mb-1">期末判斷方式</div>
-              <select value={p.hasKi === false ? "no_ki" : "ki"} onChange={(e) => update("hasKi", e.target.value === "ki")}
+              <div className="text-sm text-slate-400 mb-1">KI 類型</div>
+              <select value={kiTypeOf(p)} onChange={(e) => setP((prev) => ({ ...prev, kiType: e.target.value, hasKi: e.target.value !== "NONE" }))}
                 className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base">
-                <option value="ki">有 KI｜期末收盤價以 KI 判斷</option>
-                <option value="no_ki">無 KI｜期末收盤價以執行價判斷</option>
+                <option value="EKI">EKI</option>
+                <option value="AKI">AKI</option>
+                <option value="NONE">None</option>
               </select>
             </label>
-            {p.hasKi !== false && <TextInput label="下限價 KI %" type="number" value={p.kiPct} onChange={(v) => update("kiPct", v)} />}
+            {kiTypeOf(p) !== "NONE" && <TextInput label={`${kiTypeOf(p)} %`} type="number" value={p.kiPct} onChange={(v) => update("kiPct", v)} />}
           </>}
 
           <div>
@@ -1439,11 +1556,11 @@ function ProductForm({ product, onCancel, onSave }) {
 }
 
 function Row2({ children }) { return <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{children}</div>; }
-function TextInput({ label, value, onChange, type = "text", placeholder }) {
+function TextInput({ label, value, onChange, type = "text", placeholder, min, max, step }) {
   return (
     <label className="block">
       <div className="text-sm text-slate-400 mb-1">{label}</div>
-      <input type={type} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)}
+      <input type={type} value={value} placeholder={placeholder} min={min} max={max} step={step} onChange={(e) => onChange(e.target.value)}
         className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num" />
     </label>
   );
