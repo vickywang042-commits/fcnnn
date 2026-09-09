@@ -710,21 +710,24 @@ function formatWanAmount(value) {
   return `${wan.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}萬`;
 }
 function buildPmCopyText(items) {
-  const outcomeText = {
-    called: "今日提前到期",
-    matured_par: "今日到期保本",
-    matured_shares: "今日到期接股票",
-  };
-  return (items || []).map((item) => {
-    const product = item.p;
-    const clients = (product.clients || []).map((client) => {
-      const currency = String(client.currency || product.currency || "USD").toUpperCase();
-      const currencyNote = currency !== "USD" ? `（${currency}）` : "";
-      return `${client.name || "客戶未填"} ${formatWanAmount(client.amount)}${currencyNote}`;
+  const outcomeGroups = [
+    ["called", "今日提前到期"],
+    ["matured_par", "今日到期保本"],
+    ["matured_shares", "今日到期接股票"],
+  ];
+  return outcomeGroups.map(([statusKey, heading]) => {
+    const products = (items || []).filter((item) => item.expectedStatus === statusKey).map((item) => {
+      const product = item.p;
+      const clients = (product.clients || []).map((client) => {
+        const currency = String(client.currency || product.currency || "USD").toUpperCase();
+        const currencyNote = currency !== "USD" ? `（${currency}）` : "";
+        return `${client.name || "客戶未填"}${formatWanAmount(client.amount)}${currencyNote}`;
+      });
+      const clientText = clients.length > 0 ? clients.join("、") : "客戶未填";
+      return `${normalizeProductCode(product.code)}（${structureLabel(product)}）\n${clientText}`;
     });
-    const clientText = clients.length > 0 ? clients.join(" ") : "客戶未填";
-    return `${outcomeText[item.expectedStatus] || "今日結果待確認"} ${normalizeProductCode(product.code)}（${structureLabel(product)}） ${clientText}`;
-  }).join("\n");
+    return products.length > 0 ? `${heading}\n${products.join("\n\n")}` : "";
+  }).filter(Boolean).join("\n\n");
 }
 function fallbackCopyText(text) {
   const textarea = document.createElement("textarea");
