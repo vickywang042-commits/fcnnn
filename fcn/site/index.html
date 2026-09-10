@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>FCN記錄</title>
-<meta name="theme-color" content="#07101f" />
+<meta name="theme-color" content="#344247" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -19,50 +19,70 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+TC:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
-  :root { color-scheme:dark; }
+  :root { color-scheme:dark; --paper:#344247; --paper-deep:#293337; --card:#3d4a4e; --card-deep:#303a3e; --line:#718083; --ink:#f3eee4; --muted:#c8c7bd; --sage:#9eb09d; --rose:#bb9592; --ochre:#c0a87c; --blue:#93aab4; }
   * { box-sizing:border-box; }
-  html, body { background:#07101f; overscroll-behavior:none; font-size:17px; }
+  html, body { background:var(--paper-deep); overscroll-behavior:none; font-size:17px; }
   body {
     min-height:100vh;
     background:
-      radial-gradient(circle at 12% -5%, rgba(14,165,233,.12), transparent 30rem),
-      linear-gradient(180deg, #07101f 0%, #060b16 55%, #050914 100%);
+      radial-gradient(circle at 12% -5%, rgba(158,176,157,.18), transparent 30rem),
+      linear-gradient(180deg, #344247 0%, #2c373b 52%, #273135 100%);
   }
   .font-display { font-family:'IBM Plex Sans TC', 'IBM Plex Sans', system-ui, sans-serif; }
   .font-body { font-family: 'IBM Plex Sans TC', 'IBM Plex Sans', system-ui, sans-serif; }
   .font-num { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-  .text-slate-500 { color:#aab8d0 !important; }
-  .text-slate-600 { color:#8292af !important; }
-  .text-slate-400 { color:#c4d0e4 !important; }
+  .text-slate-50, .text-slate-100, .text-white { color:var(--ink) !important; }
+  .text-slate-200, .text-slate-300 { color:#dedbd2 !important; }
+  .text-slate-400, .text-slate-500, .text-slate-600 { color:var(--muted) !important; }
+  .bg-slate-950 { background-color:#273135 !important; }
+  .bg-slate-900 { background-color:#344044 !important; }
+  .bg-slate-800 { background-color:#48565a !important; }
+  .border-slate-800, .border-slate-700, .border-slate-600 { border-color:#718083 !important; }
+  [class*="bg-amber-"] { background-color:#665c48 !important; }
+  [class*="text-amber-"] { color:#efdcaf !important; }
+  [class*="border-amber-"] { border-color:#a59069 !important; }
+  [class*="bg-cyan-"] { background-color:#496169 !important; }
+  [class*="text-cyan-"] { color:#c9dce1 !important; }
+  [class*="border-cyan-"] { border-color:#78949b !important; }
+  [class*="bg-emerald-"] { background-color:#465c51 !important; }
+  [class*="text-emerald-"] { color:#d2e2d7 !important; }
+  [class*="border-emerald-"] { border-color:#7f9a8a !important; }
+  [class*="bg-rose-"] { background-color:#654d50 !important; }
+  [class*="text-rose-"] { color:#e8bbb7 !important; }
+  [class*="border-rose-"] { border-color:#a67c7d !important; }
   input, select, textarea {
     outline:none;
     transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;
   }
   input:focus, select:focus, textarea:focus {
-    border-color:#38bdf8 !important;
-    box-shadow:0 0 0 3px rgba(56,189,248,.14);
+    border-color:var(--ochre) !important;
+    box-shadow:0 0 0 3px rgba(192,168,124,.17);
   }
   input, select, button { min-height:2.5rem; }
   button { -webkit-tap-highlight-color:transparent; transition:filter .18s ease, transform .18s ease, border-color .18s ease, background .18s ease; }
   button:active { transform:translateY(1px); }
   .app-shell { background:transparent !important; }
   .top-panel {
-    background:linear-gradient(145deg, rgba(15,29,51,.94), rgba(10,20,37,.96));
-    border:1px solid rgba(100,116,139,.30);
+    background:linear-gradient(145deg, rgba(66,81,84,.98), rgba(50,62,66,.98));
+    border:1.5px solid rgba(181,190,184,.44);
     border-radius:1.15rem;
-    box-shadow:0 18px 50px rgba(0,0,0,.20);
+    box-shadow:2px 3px 0 rgba(25,32,34,.32), 0 14px 34px rgba(20,26,28,.16);
   }
   .utility-panel, .pm-panel {
-    background:rgba(12,23,42,.84);
-    border:1px solid rgba(100,116,139,.30);
-    box-shadow:0 12px 34px rgba(0,0,0,.15);
+    background:rgba(59,72,76,.94);
+    border:1.5px solid rgba(181,190,184,.42);
+    box-shadow:2px 3px 0 rgba(25,32,34,.25);
   }
   .product-card {
-    background:rgba(12,23,42,.88) !important;
-    border-color:rgba(100,116,139,.38) !important;
-    box-shadow:0 10px 28px rgba(0,0,0,.14);
+    background:rgba(57,70,74,.97) !important;
+    border-color:rgba(188,194,187,.48) !important;
+    box-shadow:2px 3px 0 rgba(25,32,34,.25), 0 8px 22px rgba(20,26,28,.11);
   }
-  .dashboard-card { min-height:6.6rem; box-shadow:0 8px 24px rgba(0,0,0,.13); }
+  .dashboard-card { min-height:4.75rem; box-shadow:1.5px 2px 0 rgba(25,32,34,.24); }
+  .modal-paper { background:#3b484c !important; border:1.5px solid #778588 !important; box-shadow:4px 6px 0 rgba(23,29,31,.34), 0 22px 55px rgba(18,24,26,.32); }
+  .pencil-button { border:1.5px solid rgba(205,205,191,.5); box-shadow:1.5px 2px 0 rgba(23,29,31,.28); }
+  .bottom-nav { background:rgba(45,56,60,.97); border-top:1.5px solid rgba(190,196,189,.48); box-shadow:0 -8px 25px rgba(20,26,28,.24); padding-bottom:max(.45rem, env(safe-area-inset-bottom)); }
+  .bottom-nav button[aria-current="page"] { color:#f3e1b9; background:rgba(192,168,124,.16); }
   @media (max-width: 420px) {
     html, body { font-size:16px; }
     .mobile-action-label { display:inline !important; }
@@ -90,6 +110,9 @@ const IClock = (p) => <Ico {...p}>◷</Ico>;
 const IPencil = (p) => <Ico {...p}>✎</Ico>;
 const IDownload = (p) => <Ico {...p}>⭳</Ico>;
 const IUpload = (p) => <Ico {...p}>⭱</Ico>;
+const IHome = (p) => <Ico {...p}>⌂</Ico>;
+const IUsers = (p) => <Ico {...p}>♙</Ico>;
+const IArchive = (p) => <Ico {...p}>▣</Ico>;
 
 // ---------- date helpers ----------
 const toISO = (d) => {
@@ -162,6 +185,7 @@ const fmtPrice = (value) => Number.isFinite(Number(value))
 // ---------- storage (plain localStorage — this runs as an independent hosted app) ----------
 const PRODUCTS_KEY = "fcn:products";
 const PRICES_KEY = "fcn:prices";
+const CUSTOMERS_KEY = "fcn:customers";
 function loadJSON(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -432,8 +456,7 @@ function kiTypeOf(p) {
 }
 function guaranteedCouponMonthsOf(p) {
   const value = Number(p.guaranteedCouponMonths);
-  const tenor = Math.min(12, Math.max(1, Number(p.tenorMonths) || 12));
-  return Number.isFinite(value) && value >= 1 ? Math.min(tenor, Math.floor(value)) : 1;
+  return Number.isFinite(value) && value >= 1 ? Math.min(12, Math.floor(value)) : 1;
 }
 function stepdownObservationCount(p) {
   const tenor = Math.min(12, Math.max(1, Number(p.tenorMonths) || (p.observationDates || []).length || 1));
@@ -619,10 +642,10 @@ function isCompletedStatus(status) {
 }
 
 const toneClasses = {
-  success: "bg-emerald-950 text-emerald-300 border-emerald-800",
-  danger: "bg-rose-950 text-rose-300 border-rose-800",
-  warning: "bg-amber-950 text-amber-300 border-amber-800",
-  neutral: "bg-slate-800 text-slate-300 border-slate-700",
+  success: "bg-[#405b51] text-[#d9e8dc] border-[#7f9d8e]",
+  danger: "bg-[#65494d] text-[#f0ceca] border-[#a87b7c]",
+  warning: "bg-[#655a45] text-[#efe0bc] border-[#a89672]",
+  neutral: "bg-[#48575b] text-[#e0ded5] border-[#768589]",
 };
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -630,10 +653,10 @@ const emptyUnderlying = () => ({ id: uid(), name: "", symbol: "", entryPrice: ""
 const emptyClient = (currency = "USD") => ({ id: uid(), name: "", amount: "", currency });
 const CURRENCIES = ["USD", "JPY", "AUD", "TWD", "EUR", "HKD"];
 const STRUCTURES = [
-  ["FCN", "FCN", "Fixed Coupon Note；可設 Daily 或 Daily Memory 出場條件"],
-  ["STEPDOWN_FCN", "Stepdown FCN", "每月觀察，出場門檻按輸入的步階逐月下降"],
-  ["DAC", "DAC", "每日比價，可選 Daily 或 Daily Memory；本台帳不另計每日利息"],
-  ["EXPRESS_FCN", "Express FCN", "首月每日比價，未出場後依一般 FCN 規則追蹤"],
+  ["FCN", "FCN"],
+  ["STEPDOWN_FCN", "Stepdown FCN"],
+  ["DAC", "DAC"],
+  ["EXPRESS_FCN", "Express FCN"],
 ];
 function structureLabel(p) {
   return STRUCTURES.find(([key]) => key === (p.structure || "FCN"))?.[1] || "FCN";
@@ -647,6 +670,26 @@ const emptyProduct = () => ({
   firstMonthObsEnd: "", observationDates: Array.from({ length: 6 }, () => ({ id: uid(), date: "" })),
   underlyings: [emptyUnderlying()], notes: "",
 });
+const CUSTOMER_PERMISSIONS = [
+  ["FCN", "FCN"],
+  ["STEPDOWN_FCN", "Stepdown"],
+  ["DAC", "DAC"],
+  ["EXPRESS_FCN", "Express"],
+  ["PAPER", "紙本"],
+];
+const emptyCustomerRecord = () => ({
+  id: uid(), name: "", age: "", professionalExpiry: "", highAssetExpiry: "",
+  permissions: [], coSalesName: "", unit: "",
+});
+function customerExpiryDates(customer) {
+  return [customer.professionalExpiry, customer.highAssetExpiry].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date || "")).sort();
+}
+function customerNextExpiry(customer) {
+  return customerExpiryDates(customer)[0] || "9999-12-31";
+}
+function customerExpiresInMonth(customer, month) {
+  return customerExpiryDates(customer).some((date) => date.slice(0, 7) === month);
+}
 function startDatesForProducts(products) {
   const starts = {};
   products.forEach((p) => (p.underlyings || []).forEach((u) => {
@@ -767,8 +810,8 @@ async function shareTextFile(text, filename, type, title) {
   await navigator.share({ title, files: [file] });
   return true;
 }
-function backupText(products, prices, exportedAt = new Date().toISOString()) {
-  return JSON.stringify({ format: "fcn-tracker-backup", version: 1, exportedAt, products, prices });
+function backupText(products, prices, customers = [], exportedAt = new Date().toISOString()) {
+  return JSON.stringify({ format: "fcn-tracker-backup", version: 2, exportedAt, products, prices, customers });
 }
 function parseBackupText(text) {
   const clean = String(text || "").replace(/^\uFEFF/, "").trim();
@@ -777,7 +820,7 @@ function parseBackupText(text) {
   if (!data || !Array.isArray(data.products) || !data.prices || typeof data.prices !== "object" || Array.isArray(data.prices)) {
     throw new Error("invalid backup");
   }
-  return { products: data.products, prices: data.prices };
+  return { products: data.products, prices: data.prices, customers: Array.isArray(data.customers) ? data.customers : [] };
 }
 function bytesToBase64(bytes) {
   let binary = "";
@@ -876,8 +919,13 @@ async function readBackupFile(file) {
 function App() {
   const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
   const [prices, setPrices] = useState(() => loadJSON(PRICES_KEY, {}));
+  const [customers, setCustomers] = useState(() => loadJSON(CUSTOMERS_KEY, []));
+  const [activePage, setActivePage] = useState("products");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [customerFormOpen, setCustomerFormOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [expanded, setExpanded] = useState({});
   const [refreshing, setRefreshing] = useState(false);
   const [manualInputFor, setManualInputFor] = useState(null);
@@ -888,10 +936,14 @@ function App() {
   const [searchText, setSearchText] = useState("");
   const [pmReportText, setPmReportText] = useState("");
   const [expiryMonth, setExpiryMonth] = useState(() => todayISO().slice(0, 7));
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerMonth, setCustomerMonth] = useState(() => todayISO().slice(0, 7));
+  const [customerMonthOnly, setCustomerMonthOnly] = useState(false);
   const fileInputRef = React.useRef(null);
 
   const persistProducts = useCallback((next) => { setProducts(next); saveJSON(PRODUCTS_KEY, next); }, []);
   const persistPrices = useCallback((next) => { setPrices(next); saveJSON(PRICES_KEY, next); }, []);
+  const persistCustomers = useCallback((next) => { setCustomers(next); saveJSON(CUSTOMERS_KEY, next); }, []);
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
   const saveProduct = (p) => {
@@ -906,6 +958,12 @@ function App() {
     if (symbolsToFetch.length) void refreshPricesFor(symbolsToFetch, false, startDatesForProducts(next));
   };
   const deleteProduct = (id) => persistProducts(products.filter((x) => x.id !== id));
+  const saveCustomer = (customer) => {
+    const exists = customers.some((item) => item.id === customer.id);
+    persistCustomers(exists ? customers.map((item) => item.id === customer.id ? customer : item) : [...customers, customer]);
+    setCustomerFormOpen(false); setEditingCustomer(null); showToast("客戶資料已儲存");
+  };
+  const deleteCustomer = (id) => persistCustomers(customers.filter((item) => item.id !== id));
   const setCompletionConfirmation = (id, confirmed, finalStatus = null) => {
     const next = products.map((p) => p.id === id
       ? {
@@ -992,7 +1050,7 @@ function App() {
   };
 
   const backupFileFor = async (format) => {
-    const code = await encodeBackupCode(backupText(products, prices));
+    const code = await encodeBackupCode(backupText(products, prices, customers));
     if (format === "word") return { text: backupWordText(code), name: `fcn-backup-${todayISO()}.doc`, type: "application/msword", label: "Word" };
     return { text: backupPdfText(code), name: `fcn-backup-${todayISO()}.pdf`, type: "application/pdf", label: "PDF" };
   };
@@ -1023,7 +1081,9 @@ function App() {
       const data = await parseBackupInput(await readBackupFile(file));
       persistProducts(data.products);
       persistPrices(data.prices);
-      showToast(`備份已匯入：${data.products.length} 筆商品`);
+      persistCustomers(data.customers || []);
+      setBackupModalOpen(false);
+      showToast(`備份已匯入：${data.products.length} 筆商品、${(data.customers || []).length} 筆客戶`);
     } catch (e) {
       showToast(backupImportErrorMessage(e, "備份檔"));
     }
@@ -1067,7 +1127,7 @@ function App() {
   }, [statuses, expiryMonth]);
 
   // exited products (already called / matured) sink to the bottom; live ones sort by soonest maturity
-  const filteredStatuses = useMemo(() => {
+  const filteredByPrimary = useMemo(() => {
     let result = statuses;
     if (activeFilter === "called") result = statuses.filter((s) => s.status.key === "called" && !s.p.completionConfirmed);
     else if (activeFilter === "matured_par") result = statuses.filter((s) => s.status.key === "matured_par" && !s.p.completionConfirmed);
@@ -1077,8 +1137,16 @@ function App() {
       .sort((a,b) => a.status.daysToMaturity - b.status.daysToMaturity);
     else if (activeFilter === "month") result = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
       .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
-    return oneLeftOnly ? result.filter((item) => isOneUnderlyingFromCall(item.status)) : result;
-  }, [statuses, activeFilter, expiryMonth, oneLeftOnly]);
+    return result;
+  }, [statuses, activeFilter, expiryMonth]);
+  const contextualOneLeftCount = useMemo(
+    () => filteredByPrimary.filter((item) => isOneUnderlyingFromCall(item.status)).length,
+    [filteredByPrimary]
+  );
+  const filteredStatuses = useMemo(
+    () => oneLeftOnly ? filteredByPrimary.filter((item) => isOneUnderlyingFromCall(item.status)) : filteredByPrimary,
+    [filteredByPrimary, oneLeftOnly]
+  );
 
   const sortedStatuses = useMemo(() => {
     const searched = filteredStatuses.filter(({ p }) => !searchText.trim() || String(p.code || "").toUpperCase().includes(searchText.trim().toUpperCase()));
@@ -1099,39 +1167,66 @@ function App() {
     className: `rounded-xl border px-3 py-3 cursor-pointer transition ${(key === "one_left" ? oneLeftOnly : activeFilter === key) ? "ring-2 ring-amber-400" : "hover:border-slate-400"} ${toneClasses[key === "upcoming" || key === "month" || key === "pending_docs" || key === "one_left" ? "warning" : key === "matured_shares" ? "danger" : "success"]}`
   });
 
+  const customerMonthCount = useMemo(
+    () => customers.filter((customer) => customerExpiresInMonth(customer, customerMonth)).length,
+    [customers, customerMonth]
+  );
+  const visibleCustomers = useMemo(() => {
+    const query = customerSearch.trim().toLocaleLowerCase("zh-Hant");
+    return customers
+      .filter((customer) => !query || String(customer.name || "").toLocaleLowerCase("zh-Hant").includes(query))
+      .filter((customer) => !customerMonthOnly || customerExpiresInMonth(customer, customerMonth))
+      .sort((a, b) => customerNextExpiry(a).localeCompare(customerNextExpiry(b)) || String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant"));
+  }, [customers, customerSearch, customerMonthOnly, customerMonth]);
+  const staffDirectory = useMemo(() => {
+    const map = new Map();
+    customers.forEach((customer) => {
+      const name = String(customer.coSalesName || "").trim();
+      if (name) map.set(name, { name, unit: String(customer.unit || "").trim() });
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }, [customers]);
+
   return (
-    <div className="app-shell min-h-screen text-slate-200 font-body pb-12" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+    <div className="app-shell min-h-screen text-slate-200 font-body pb-28" style={{ paddingTop: "env(safe-area-inset-top)" }}>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5 sm:py-7">
-        <div className="top-panel flex items-center justify-between gap-4 mb-5 px-4 sm:px-5 py-4">
+        <div className="top-panel flex items-center justify-between gap-4 mb-4 px-4 sm:px-5 py-3.5">
           <div className="flex items-center gap-3 min-w-0">
             <img src="/icon-192.png" alt="" className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl shrink-0 shadow-lg shadow-cyan-950/40" />
             <div>
-              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">FCN記錄</h1>
+              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">{activePage === "products" ? "FCN記錄" : "客戶資料"}</h1>
               <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
             </div>
           </div>
-          <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
-            className="flex items-center gap-2 bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-semibold px-3.5 py-2.5 rounded-xl shrink-0 shadow-lg shadow-amber-950/30">
-            <IRefresh className={refreshing ? "animate-spin" : ""} />
-            <span className="mobile-action-label">今日更新</span>
-          </button>
+          {activePage === "products" ? (
+            <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
+              className="pencil-button flex items-center gap-2 bg-[#c0a87c] hover:bg-[#ccb88f] disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-semibold px-3 py-2.5 rounded-xl shrink-0">
+              <IRefresh className={refreshing ? "animate-spin" : ""} />
+              <span className="mobile-action-label">今日更新</span>
+            </button>
+          ) : (
+            <button onClick={() => { setEditingCustomer(emptyCustomerRecord()); setCustomerFormOpen(true); }}
+              className="pencil-button flex items-center gap-2 bg-[#9eb09d] text-slate-950 font-semibold px-3 py-2.5 rounded-xl shrink-0">
+              <IPlus /> 新增客戶
+            </button>
+          )}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        {activePage === "products" ? <>
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-3">
           <DashCard label="待補最終文件" count={buckets.pendingDocs.length} tone="warning" icon={IClock} {...filterCard("pending_docs")} />
           <DashCard label="提前出場" count={buckets.called.length} tone="success" icon={ICheck} {...filterCard("called")} />
           <DashCard label="到期保本" count={buckets.maturedPar.length} tone="success" icon={ICheck} {...filterCard("matured_par")} />
           <DashCard label="到期接股票" count={buckets.maturedShares.length} tone="danger" icon={IX2} {...filterCard("matured_shares")} />
           <DashCard label="7天內到期" count={buckets.upcoming.length} tone="warning" icon={IClock} {...filterCard("upcoming")} />
           <DashCard label={`${expiryMonth.replace("-", "/")}到期`} count={buckets.month.length} tone="warning" icon={IClock} {...filterCard("month")} />
-          <DashCard label="只差1檔出場" count={buckets.oneLeft.length} tone="warning" icon={IWarn} {...filterCard("one_left")} />
+          <DashCard label={activeFilter === "month" ? "本月只差1檔" : "只差1檔出場"} count={contextualOneLeftCount} tone="warning" icon={IWarn} {...filterCard("one_left")} />
         </div>
 
-        <label className="flex items-center gap-3 mb-5 text-sm text-slate-300">
+        <label className="flex flex-wrap items-center gap-2.5 mb-4 text-sm text-slate-300">
           <span className="shrink-0">到期月份</span>
           <input type="month" value={expiryMonth} onChange={(e) => setExpiryMonth(e.target.value)}
             className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 font-num" />
-          <span className="text-xs text-slate-500">可自行指定月份；點卡片篩選未出場商品</span>
         </label>
 
         {(activeFilter !== "all" || oneLeftOnly) && (
@@ -1141,34 +1236,24 @@ function App() {
           </div>
         )}
 
-        <div className="utility-panel flex flex-wrap items-center gap-x-5 gap-y-2 mb-5 rounded-xl px-3.5 py-2.5">
+        <div className="utility-panel flex items-center justify-between gap-3 mb-4 rounded-xl px-3.5 py-2.5">
           <button onClick={() => { setEditing(emptyProduct()); setShowForm(true); }}
-            className="flex items-center gap-2 text-amber-500 hover:text-amber-400 text-sm font-medium">
+            className="flex items-center gap-2 text-[#ead29f] hover:text-[#f0dfbb] text-sm font-medium">
             <IPlus /> 新增產品
           </button>
-          <button onClick={() => exportBackup("pdf")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IDownload /> 下載 PDF 備份
+          <button onClick={() => setBackupModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">
+            <IArchive /> 備份與還原
           </button>
-          <button onClick={() => exportBackup("word")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IDownload /> 下載 Word 備份
-          </button>
-          <button onClick={() => shareBackup("pdf")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IUpload /> 分享 PDF
-          </button>
-          <button onClick={() => shareBackup("word")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IUpload /> 分享 Word
-          </button>
-          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IUpload /> 匯入還原
-          </button>
-          <input ref={fileInputRef} type="file" className="hidden"
-            onChange={async (e) => { const file = e.target.files?.[0]; if (file) await importBackup(file); e.target.value = ""; }} />
         </div>
 
         <label className="block mb-5">
           <div className="text-sm text-slate-300 mb-2">搜尋產品代號</div>
-          <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="例如：2026SN1111"
-            className="w-full bg-slate-900/80 border border-slate-600 rounded-xl px-4 py-3 text-slate-50 font-num placeholder:text-slate-500 shadow-inner" />
+          <div className="relative">
+            <input value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="例如：2026SN1111"
+              className="w-full bg-slate-900/80 border border-slate-600 rounded-xl pl-4 pr-12 py-3 text-slate-50 font-num placeholder:text-slate-500 shadow-inner" />
+            {searchText && <button type="button" aria-label="清除產品搜尋" onClick={() => setSearchText("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 min-h-0 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
+          </div>
         </label>
 
         <div className="pm-panel mb-6 rounded-2xl p-4 sm:p-5">
@@ -1205,7 +1290,7 @@ function App() {
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <div className="font-medium text-cyan-100">今日主管回報格式</div>
                     <button type="button" onClick={copyPmResult}
-                      className="shrink-0 rounded-lg bg-cyan-300 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-cyan-200">
+                      className="pencil-button shrink-0 rounded-lg bg-[#9eb5bc] px-3 py-1.5 text-sm font-semibold text-slate-950">
                       一鍵複製
                     </button>
                   </div>
@@ -1222,7 +1307,7 @@ function App() {
           )}
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {sortedStatuses.length === 0 && (
             <div className="text-center text-slate-400 py-16 border border-dashed border-slate-600 rounded-xl">
               {searchText || activeFilter !== "all" || oneLeftOnly ? "沒有符合目前搜尋或篩選條件的商品" : "還沒有產品，點上面「新增產品」開始記錄"}
@@ -1230,16 +1315,16 @@ function App() {
           )}
           {sortedStatuses.map(({ p, status }) => (
             <div key={p.id} className="product-card border rounded-2xl overflow-hidden">
-              <div className="flex flex-col gap-3 px-4 py-4 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
+              <div className="flex flex-col gap-2.5 px-3.5 py-3 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
                 onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
                 <div className="w-full min-w-0 sm:w-auto">
-                  <div className="font-medium text-xl text-slate-50 break-words font-num">{p.code || "未命名產品"}</div>
+                  <div className="font-medium text-lg sm:text-xl text-slate-50 break-words font-num">{p.code || "未命名產品"}</div>
                   <div className="text-sm text-slate-400 break-words mt-0.5">
                     {structureLabel(p)} ・ {(p.clients || []).map((c) => c.name).filter(Boolean).join("、") || "—"}
                   </div>
                 </div>
                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-                  <span className={`px-3 py-1.5 rounded-full text-sm border font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
+                  <span className={`px-2.5 py-1 rounded-full text-sm border font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
                   {p.completionConfirmed && (
                     <span className="px-2.5 py-1.5 rounded-full text-xs border border-slate-600 bg-slate-800 text-slate-300">已確認結案</span>
                   )}
@@ -1252,7 +1337,7 @@ function App() {
               </div>
 
               {expanded[p.id] && (
-                <div className="px-4 pb-5 border-t border-slate-700 pt-4 text-base">
+                <div className="px-3.5 pb-4 border-t border-slate-700 pt-3.5 text-base">
                   {status.key === "pending_docs" && (
                     <div className="mb-4 rounded-xl border border-amber-700 bg-amber-950/40 px-4 py-3 text-amber-100">
                       <div className="font-medium">等待最終文件</div>
@@ -1400,6 +1485,21 @@ function App() {
             </div>
           ))}
         </div>
+        </> : (
+          <CustomerPage
+            customers={visibleCustomers}
+            totalCount={customers.length}
+            searchText={customerSearch}
+            onSearch={setCustomerSearch}
+            month={customerMonth}
+            onMonth={setCustomerMonth}
+            monthOnly={customerMonthOnly}
+            onToggleMonth={() => setCustomerMonthOnly((value) => !value)}
+            monthCount={customerMonthCount}
+            onEdit={(customer) => { setEditingCustomer(customer); setCustomerFormOpen(true); }}
+            onDelete={deleteCustomer}
+          />
+        )}
       </div>
 
       {showForm && editing && (
@@ -1414,14 +1514,35 @@ function App() {
               className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 font-num mb-3" placeholder="例如 178.32" />
             <div className="flex gap-2">
               <button onClick={() => setManualInputFor(null)} className="flex-1 py-2 rounded-lg border border-slate-700 text-slate-400 text-sm">取消</button>
-              <button onClick={setManualPrice} className="flex-1 py-2 rounded-lg bg-amber-600 text-slate-950 text-sm font-medium">儲存</button>
+              <button onClick={setManualPrice} className="flex-1 py-2 rounded-lg bg-[#c0a87c] text-slate-950 text-sm font-medium">儲存</button>
             </div>
           </div>
         </div>
       )}
 
+      {customerFormOpen && editingCustomer && (
+        <CustomerForm customer={editingCustomer} staffDirectory={staffDirectory}
+          onCancel={() => { setCustomerFormOpen(false); setEditingCustomer(null); }} onSave={saveCustomer} />
+      )}
+
+      {backupModalOpen && (
+        <BackupModal onClose={() => setBackupModalOpen(false)} onDownload={exportBackup} onShare={shareBackup}
+          onImport={() => fileInputRef.current?.click()} />
+      )}
+      <input ref={fileInputRef} type="file" className="hidden"
+        onChange={async (e) => { const file = e.target.files?.[0]; if (file) await importBackup(file); e.target.value = ""; }} />
+
+      <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40">
+        <div className="mx-auto grid max-w-md grid-cols-2 gap-2 px-4 pt-2">
+          <button type="button" aria-current={activePage === "products" ? "page" : undefined} onClick={() => setActivePage("products")}
+            className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IHome size={21} />FCN</button>
+          <button type="button" aria-current={activePage === "customers" ? "page" : undefined} onClick={() => setActivePage("customers")}
+            className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IUsers size={21} />客戶</button>
+        </div>
+      </nav>
+
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 text-slate-200 text-sm px-4 py-2 rounded-full shadow-lg z-50">
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-800 border border-slate-700 text-slate-200 text-sm px-4 py-2 rounded-full shadow-lg z-50">
           {toast}
         </div>
       )}
@@ -1429,15 +1550,165 @@ function App() {
   );
 }
 
+function BackupModal({ onClose, onDownload, onShare, onImport }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-3 sm:items-center" onClick={onClose}>
+      <div className="modal-paper w-full max-w-md rounded-2xl p-4 sm:p-5" onClick={(event) => event.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="font-display text-xl text-slate-50">備份與還原</div>
+          <button type="button" aria-label="關閉" onClick={onClose} className="h-9 w-9 min-h-0 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>
+        </div>
+        <div className="grid grid-cols-2 gap-2.5">
+          <button type="button" onClick={() => onDownload("pdf")} className="pencil-button rounded-xl bg-[#65787c] px-3 py-3 text-slate-50"><IDownload /> PDF 備份</button>
+          <button type="button" onClick={() => onDownload("word")} className="pencil-button rounded-xl bg-[#65787c] px-3 py-3 text-slate-50"><IDownload /> Word 備份</button>
+          <button type="button" onClick={() => onShare("pdf")} className="pencil-button rounded-xl bg-[#596d71] px-3 py-3 text-slate-50"><IUpload /> 分享 PDF</button>
+          <button type="button" onClick={() => onShare("word")} className="pencil-button rounded-xl bg-[#596d71] px-3 py-3 text-slate-50"><IUpload /> 分享 Word</button>
+          <button type="button" onClick={onImport} className="pencil-button col-span-2 rounded-xl bg-[#9eb09d] px-3 py-3 font-semibold text-slate-950"><IUpload /> 匯入還原</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerPage({ customers, totalCount, searchText, onSearch, month, onMonth, monthOnly, onToggleMonth, monthCount, onEdit, onDelete }) {
+  const permissionLabel = (key) => CUSTOMER_PERMISSIONS.find(([value]) => value === key)?.[1] || key;
+  return (
+    <div>
+      <div className="utility-panel mb-4 rounded-2xl p-3.5 sm:p-4">
+        <div className="mb-3 text-sm text-slate-300">共 {totalCount} 位客戶</div>
+        <div className="grid gap-2.5 sm:grid-cols-[1fr_auto]">
+          <div className="relative">
+            <input value={searchText} onChange={(event) => onSearch(event.target.value)} placeholder="搜尋客戶姓名"
+              className="w-full rounded-xl border border-slate-600 bg-slate-900 px-3.5 py-2.5 pr-11 text-slate-50" />
+            {searchText && <button type="button" aria-label="清除客戶搜尋" onClick={() => onSearch("")}
+              className="absolute right-1.5 top-1/2 h-9 w-9 min-h-0 -translate-y-1/2 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
+          </div>
+          <div className="flex gap-2">
+            <input type="month" value={month} onChange={(event) => onMonth(event.target.value)}
+              className="min-w-0 flex-1 rounded-xl border border-slate-600 bg-slate-900 px-2.5 py-2 text-slate-50 font-num sm:w-40" />
+            <button type="button" aria-pressed={monthOnly} onClick={onToggleMonth}
+              className={`pencil-button shrink-0 rounded-xl px-3 py-2 text-sm ${monthOnly ? "bg-[#c0a87c] text-slate-950" : "bg-[#536468] text-slate-100"}`}>
+              本月到期 {monthCount}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        {customers.length === 0 && (
+          <div className="rounded-2xl border border-dashed border-slate-600 py-16 text-center text-slate-300">
+            {searchText || monthOnly ? "沒有符合條件的客戶" : "尚未建立客戶資料"}
+          </div>
+        )}
+        {customers.map((customer) => (
+          <article key={customer.id} className="product-card rounded-2xl border p-3.5 sm:p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <h2 className="text-lg font-semibold text-slate-50">{customer.name || "未命名客戶"}</h2>
+                  {customer.age && <span className="text-sm text-slate-300 font-num">{customer.age} 歲</span>}
+                </div>
+                <div className="mt-1 text-sm text-slate-300">共銷：{customer.coSalesName || "—"}{customer.unit ? `・${customer.unit}` : ""}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                <button type="button" onClick={() => onEdit(customer)} className="text-slate-300"><IPencil /></button>
+                <button type="button" onClick={() => onDelete(customer.id)} className="text-[#e2aaa7]"><ITrash /></button>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+              <div className="rounded-xl bg-[#2f3a3e] px-3 py-2.5">
+                <div className="text-slate-400">專業投資人到期</div>
+                <div className="mt-0.5 text-slate-100 font-num">{fmtDate(customer.professionalExpiry)}</div>
+              </div>
+              <div className="rounded-xl bg-[#2f3a3e] px-3 py-2.5">
+                <div className="text-slate-400">高資產客戶到期</div>
+                <div className="mt-0.5 text-slate-100 font-num">{fmtDate(customer.highAssetExpiry)}</div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {(customer.permissions || []).length > 0 ? customer.permissions.map((permission) => (
+                <span key={permission} className="rounded-full border border-[#93a493] bg-[#53645b] px-2.5 py-1 text-xs text-[#edf1e8]">{permissionLabel(permission)}</span>
+              )) : <span className="text-sm text-slate-400">尚未設定交易權限</span>}
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CustomerForm({ customer, staffDirectory, onCancel, onSave }) {
+  const [record, setRecord] = useState(() => ({ ...emptyCustomerRecord(), ...customer, permissions: customer.permissions || [] }));
+  const update = (key, value) => setRecord((previous) => ({ ...previous, [key]: value }));
+  const updateCoSales = (value) => setRecord((previous) => {
+    const match = staffDirectory.find((staff) => staff.name === value);
+    return { ...previous, coSalesName: value, unit: match ? match.unit : previous.unit };
+  });
+  const togglePermission = (key) => setRecord((previous) => ({
+    ...previous,
+    permissions: previous.permissions.includes(key) ? previous.permissions.filter((item) => item !== key) : [...previous.permissions, key],
+  }));
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-3 sm:items-center" onClick={onCancel}>
+      <div className="modal-paper max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-700 bg-[#3b484c] px-4 py-3.5">
+          <div className="font-display text-xl text-slate-50">{customer.name ? "編輯客戶" : "新增客戶"}</div>
+          <button type="button" aria-label="關閉" onClick={onCancel} className="h-9 w-9 min-h-0 rounded-lg text-slate-300"><IX2 /></button>
+        </div>
+        <div className="space-y-4 p-4">
+          <Row2>
+            <TextInput label="客戶姓名" value={record.name} onChange={(value) => update("name", value)} />
+            <TextInput label="年齡" type="number" min="0" value={record.age} onChange={(value) => update("age", value)} />
+          </Row2>
+          <Row2>
+            <TextInput label="專業投資人到期日" type="date" value={record.professionalExpiry} onChange={(value) => update("professionalExpiry", value)} />
+            <TextInput label="高資產客戶到期日" type="date" value={record.highAssetExpiry} onChange={(value) => update("highAssetExpiry", value)} />
+          </Row2>
+          <div>
+            <div className="mb-2 text-sm text-slate-300">交易權限</div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {CUSTOMER_PERMISSIONS.map(([key, label]) => (
+                <label key={key} className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 ${record.permissions.includes(key) ? "border-[#aebeaa] bg-[#53645b]" : "border-slate-600 bg-[#303a3e]"}`}>
+                  <input type="checkbox" checked={record.permissions.includes(key)} onChange={() => togglePermission(key)} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <Row2>
+            <label className="block">
+              <div className="mb-1 text-sm text-slate-400">共銷人員</div>
+              <input list="co-sales-directory" value={record.coSalesName} onChange={(event) => updateCoSales(event.target.value)}
+                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-base text-slate-100" />
+              <datalist id="co-sales-directory">{staffDirectory.map((staff) => <option key={staff.name} value={staff.name}>{staff.unit}</option>)}</datalist>
+            </label>
+            <label className="block">
+              <div className="mb-1 text-sm text-slate-400">單位</div>
+              <input list="unit-directory" value={record.unit} onChange={(event) => update("unit", event.target.value)}
+                className="w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-base text-slate-100" />
+              <datalist id="unit-directory">{Array.from(new Set(staffDirectory.map((staff) => staff.unit).filter(Boolean))).map((unit) => <option key={unit} value={unit} />)}</datalist>
+            </label>
+          </Row2>
+        </div>
+        <div className="sticky bottom-0 flex gap-2 border-t border-slate-700 bg-[#3b484c] px-4 py-3.5">
+          <button type="button" onClick={onCancel} className="flex-1 rounded-xl border border-slate-600 py-2.5 text-slate-300">取消</button>
+          <button type="button" disabled={!record.name.trim()} onClick={() => onSave(record)}
+            className="flex-1 rounded-xl bg-[#c0a87c] py-2.5 font-semibold text-slate-950 disabled:bg-slate-800 disabled:text-slate-500">儲存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DashCard({ label, count, tone, icon: Icon, onClick, className = "" }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={className.includes("ring-2")}
-      className={`dashboard-card ${className || ""} w-full text-left rounded-2xl border px-3.5 py-3.5 ${toneClasses[tone]}`}>
-      <div className="flex items-center justify-between mb-1">
-        <Icon />
-        <span className="font-num text-3xl font-semibold">{count}</span>
+      className={`dashboard-card ${className || ""} w-full text-left rounded-xl border px-2.5 py-2 ${toneClasses[tone]}`}>
+      <div className="flex items-center justify-between gap-1">
+        <Icon size={14} />
+        <span className="font-num text-xl sm:text-2xl font-semibold">{count}</span>
       </div>
-      <div className="text-sm opacity-90">{label}</div>
+      <div className="mt-0.5 text-xs sm:text-sm leading-tight opacity-95">{label}</div>
     </button>
   );
 }
@@ -1516,8 +1787,8 @@ function ProductForm({ product, onCancel, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900">
+      <div className="modal-paper rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 sticky top-0 bg-[#3b484c] z-10">
           <div className="font-display text-lg text-slate-100 italic">{product.code ? "編輯產品" : "新增產品"}</div>
           <button onClick={onCancel}><IX2 size={18} className="text-slate-500" /></button>
         </div>
@@ -1580,7 +1851,6 @@ function ProductForm({ product, onCancel, onSave }) {
               className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base">
               {STRUCTURES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
-            <div className="text-sm text-slate-400 mt-1.5">{STRUCTURES.find(([key]) => key === (p.structure || "FCN"))?.[2]}</div>
           </label>
 
           {isDailyStructure(p) && (
@@ -1591,7 +1861,6 @@ function ProductForm({ product, onCancel, onSave }) {
                 <option value="daily_memory">Daily Memory</option>
                 <option value="daily">Daily</option>
               </select>
-              <div className="text-sm text-amber-100/80 mt-2">一律使用開始比價日後的正式收盤價，不使用盤中最高價。</div>
             </label>
           )}
 
@@ -1617,8 +1886,13 @@ function ProductForm({ product, onCancel, onSave }) {
             </label>
           </Row2>
 
-          <TextInput label="保證領息月份" type="number" min="1" max={p.tenorMonths} step="1"
-            value={p.guaranteedCouponMonths} onChange={(v) => update("guaranteedCouponMonths", v)} />
+          <label className="block">
+            <div className="text-sm text-slate-400 mb-1">保證領息月份</div>
+            <select value={p.guaranteedCouponMonths} onChange={(e) => update("guaranteedCouponMonths", Number(e.target.value))}
+              className="w-full bg-slate-950 border border-slate-600 rounded-lg px-3 py-2.5 text-slate-100 text-base font-num">
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => <option key={month} value={month}>{month} 個月</option>)}
+            </select>
+          </label>
 
           {!isStepdown(p) && (
             <TextInput label="開始比價日" type="date" value={p.startObsDate || ""} onChange={(v) => update("startObsDate", v)} />
@@ -1693,16 +1967,15 @@ function ProductForm({ product, onCancel, onSave }) {
             </div>
           </div>
 
-          {structureOf(p) === "DAC" && <div className="rounded-lg bg-slate-950 px-3 py-2 text-sm text-slate-400">DAC 依每日收盤價追蹤出場；未達執行價的無息日不在本台帳計算利息。</div>}
           </>}
 
           <TextInput label="備註" value={p.notes || ""} onChange={(v) => update("notes", v)} />
         </div>
 
-        <div className="flex gap-2 px-5 py-4 border-t border-slate-800 sticky bottom-0 bg-slate-900">
+        <div className="flex gap-2 px-5 py-4 border-t border-slate-800 sticky bottom-0 bg-[#3b484c]">
           <button onClick={onCancel} className="flex-1 py-2.5 rounded-lg border border-slate-700 text-slate-400">取消</button>
           <button disabled={!canSave} onClick={() => onSave(p)}
-            className="flex-1 py-2.5 rounded-lg bg-amber-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-medium">儲存</button>
+            className="flex-1 py-2.5 rounded-lg bg-[#c0a87c] disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-medium">儲存</button>
         </div>
       </div>
     </div>
