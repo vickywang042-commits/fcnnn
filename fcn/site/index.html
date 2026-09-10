@@ -9,6 +9,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="FCN記錄" />
+<meta name="description" content="FCN 結構型商品收盤價追蹤與到期管理" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -746,6 +750,128 @@ function isOneUnderlyingFromCall(status) {
   const progress = status?.koProgress;
   return status?.key === "live" && progress?.total >= 2 && progress.hitCount === progress.total - 1;
 }
+function downloadTextFile(text, filename, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function shareTextFile(text, filename, type, title) {
+  const file = new File([text], filename, { type });
+  if (!navigator.share || !navigator.canShare?.({ files: [file] })) return false;
+  await navigator.share({ title, files: [file] });
+  return true;
+}
+function backupText(products, prices, exportedAt = new Date().toISOString()) {
+  return JSON.stringify({ format: "fcn-tracker-backup", version: 1, exportedAt, products, prices });
+}
+function parseBackupText(text) {
+  const clean = String(text || "").replace(/^\uFEFF/, "").trim();
+  if (!clean) throw new Error("empty backup");
+  const data = JSON.parse(clean);
+  if (!data || !Array.isArray(data.products) || !data.prices || typeof data.prices !== "object" || Array.isArray(data.prices)) {
+    throw new Error("invalid backup");
+  }
+  return { products: data.products, prices: data.prices };
+}
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 32768;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+function backupChecksum(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+async function encodeBackupCode(text) {
+  const payload = bytesToBase64(new TextEncoder().encode(text));
+  return `FCNRAW2:${payload.length}:${backupChecksum(payload)}:${payload}`;
+}
+function backupPdfText(portableCode) {
+  const content = "BT\n/F1 20 Tf\n72 740 Td\n(FCN Backup) Tj\nET\n";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const wrappedBackup = portableCode.match(/.{1,96}/g).map((line) => `%${line}\n`).join("");
+  pdf += `%FCN-BACKUP-DATA\n${wrappedBackup}`;
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index <= objects.length; index += 1) pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return pdf;
+}
+function backupWordText(portableCode) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>FCN Backup</title></head><body><h1>FCN Backup</h1><pre>${portableCode}</pre></body></html>`;
+}
+async function decodeBackupInput(text) {
+  const clean = String(text || "").replace(/^\uFEFF/, "").trim();
+  const raw2Index = clean.toUpperCase().indexOf("FCNRAW2:");
+  if (raw2Index >= 0) {
+    const compact = clean.slice(raw2Index).replace(/[%\s\u200B-\u200D\uFEFF]+/g, "");
+    const match = compact.match(/^FCNRAW2:(\d+):([0-9a-f]{8}):([A-Za-z0-9+/=]+)/i);
+    if (!match) throw new Error("BACKUP_CODE_INCOMPLETE");
+    const expectedLength = Number(match[1]);
+    const expectedChecksum = match[2].toLowerCase();
+    const payload = match[3].slice(0, expectedLength);
+    if (payload.length !== expectedLength || backupChecksum(payload) !== expectedChecksum) throw new Error("BACKUP_CODE_INCOMPLETE");
+    return new TextDecoder().decode(base64ToBytes(payload));
+  }
+  if (clean.startsWith("FCNGZIP1:")) {
+    if (typeof DecompressionStream === "undefined") throw new Error("gzip unsupported");
+    const bytes = base64ToBytes(clean.slice(9));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return await new Response(stream).text();
+  }
+  if (clean.startsWith("FCNRAW1:")) return new TextDecoder().decode(base64ToBytes(clean.slice(8)));
+  return clean;
+}
+function backupImportErrorMessage(error, source = "備份") {
+  if (error?.message === "BACKUP_CODE_INCOMPLETE") return "備份檔內容不完整，請重新下載或分享";
+  if (error?.message === "gzip unsupported") return "這是舊版備份，請由新版網站重新下載";
+  if (error instanceof SyntaxError) return `${source}內容不是有效資料`;
+  return `${source}格式不符或內容不完整`;
+}
+async function parseBackupInput(text) {
+  return parseBackupText(await decodeBackupInput(text));
+}
+async function readBackupFile(file) {
+  if (!file) throw new Error("missing file");
+  if (typeof file.text === "function") return await file.text();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsText(file);
+  });
+}
 
 function App() {
   const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
@@ -865,30 +991,43 @@ function App() {
     setManualInputFor(null); setManualValue("");
   };
 
-  const exportBackup = () => {
-    const payload = { exportedAt: new Date().toISOString(), products, prices };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `fcn-backup-${todayISO()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast("備份已下載");
+  const backupFileFor = async (format) => {
+    const code = await encodeBackupCode(backupText(products, prices));
+    if (format === "word") return { text: backupWordText(code), name: `fcn-backup-${todayISO()}.doc`, type: "application/msword", label: "Word" };
+    return { text: backupPdfText(code), name: `fcn-backup-${todayISO()}.pdf`, type: "application/pdf", label: "PDF" };
   };
-  const importBackup = (file) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result);
-        if (Array.isArray(data.products)) persistProducts(data.products);
-        if (data.prices && typeof data.prices === "object") persistPrices(data.prices);
-        showToast("備份已匯入");
-      } catch (e) { showToast("檔案格式錯誤，匯入失敗"); }
-    };
-    reader.readAsText(file);
+  const exportBackup = async (format) => {
+    try {
+      const file = await backupFileFor(format);
+      downloadTextFile(file.text, file.name, file.type);
+      showToast(`${file.label} 備份已下載`);
+    } catch (_) {
+      showToast("建立備份失敗");
+    }
   };
-
+  const shareBackup = async (format) => {
+    try {
+      const file = await backupFileFor(format);
+      if (await shareTextFile(file.text, file.name, file.type, "FCN記錄備份")) {
+        showToast("已開啟手機分享選單");
+      } else {
+        downloadTextFile(file.text, file.name, file.type);
+        showToast("此瀏覽器不支援檔案分享，已改為下載備份");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError") showToast("分享失敗，請改用下載備份");
+    }
+  };
+  const importBackup = async (file) => {
+    try {
+      const data = await parseBackupInput(await readBackupFile(file));
+      persistProducts(data.products);
+      persistPrices(data.prices);
+      showToast(`備份已匯入：${data.products.length} 筆商品`);
+    } catch (e) {
+      showToast(backupImportErrorMessage(e, "備份檔"));
+    }
+  };
   const statuses = useMemo(() => {
     const today = todayISO();
     return products.map((p) => ({ p, status: computeStatus(p, prices, today) }));
@@ -964,9 +1103,12 @@ function App() {
     <div className="app-shell min-h-screen text-slate-200 font-body pb-12" style={{ paddingTop: "env(safe-area-inset-top)" }}>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5 sm:py-7">
         <div className="top-panel flex items-center justify-between gap-4 mb-5 px-4 sm:px-5 py-4">
-          <div>
-            <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">FCN記錄</h1>
-            <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
+          <div className="flex items-center gap-3 min-w-0">
+            <img src="/icon-192.png" alt="" className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl shrink-0 shadow-lg shadow-cyan-950/40" />
+            <div>
+              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">FCN記錄</h1>
+              <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
+            </div>
           </div>
           <button onClick={refreshAllPrices} disabled={refreshing || allSymbols.length === 0}
             className="flex items-center gap-2 bg-amber-400 hover:bg-amber-300 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-semibold px-3.5 py-2.5 rounded-xl shrink-0 shadow-lg shadow-amber-950/30">
@@ -1004,14 +1146,23 @@ function App() {
             className="flex items-center gap-2 text-amber-500 hover:text-amber-400 text-sm font-medium">
             <IPlus /> 新增產品
           </button>
-          <button onClick={exportBackup} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
-            <IDownload /> 匯出備份
+          <button onClick={() => exportBackup("pdf")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IDownload /> 下載 PDF 備份
+          </button>
+          <button onClick={() => exportBackup("word")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IDownload /> 下載 Word 備份
+          </button>
+          <button onClick={() => shareBackup("pdf")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IUpload /> 分享 PDF
+          </button>
+          <button onClick={() => shareBackup("word")} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
+            <IUpload /> 分享 Word
           </button>
           <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-slate-400 hover:text-slate-200 text-sm">
             <IUpload /> 匯入還原
           </button>
-          <input ref={fileInputRef} type="file" accept="application/json" className="hidden"
-            onChange={(e) => { if (e.target.files[0]) importBackup(e.target.files[0]); e.target.value = ""; }} />
+          <input ref={fileInputRef} type="file" className="hidden"
+            onChange={async (e) => { const file = e.target.files?.[0]; if (file) await importBackup(file); e.target.value = ""; }} />
         </div>
 
         <label className="block mb-5">
