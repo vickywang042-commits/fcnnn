@@ -678,17 +678,21 @@ const CUSTOMER_PERMISSIONS = [
   ["PAPER", "紙本"],
 ];
 const emptyCustomerRecord = () => ({
-  id: uid(), name: "", age: "", professionalExpiry: "", highAssetExpiry: "",
-  permissions: [], coSalesName: "", unit: "",
+  id: uid(), name: "", permissions: [], coSalesName: "", unit: "", notes: "",
 });
-function customerExpiryDates(customer) {
-  return [customer.professionalExpiry, customer.highAssetExpiry].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date || "")).sort();
+function normalizedCustomerName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("zh-Hant");
 }
-function customerNextExpiry(customer) {
-  return customerExpiryDates(customer)[0] || "9999-12-31";
-}
-function customerExpiresInMonth(customer, month) {
-  return customerExpiryDates(customer).some((date) => date.slice(0, 7) === month);
+function cleanCustomerRecord(customer = {}) {
+  const allowed = new Set(CUSTOMER_PERMISSIONS.map(([key]) => key));
+  return {
+    id: customer.id || uid(),
+    name: String(customer.name || "").trim(),
+    permissions: Array.isArray(customer.permissions) ? customer.permissions.filter((key) => allowed.has(key)) : [],
+    coSalesName: String(customer.coSalesName || "").trim(),
+    unit: String(customer.unit || "").trim(),
+    notes: String(customer.notes || "").trim(),
+  };
 }
 function startDatesForProducts(products) {
   const starts = {};
@@ -919,7 +923,10 @@ async function readBackupFile(file) {
 function App() {
   const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
   const [prices, setPrices] = useState(() => loadJSON(PRICES_KEY, {}));
-  const [customers, setCustomers] = useState(() => loadJSON(CUSTOMERS_KEY, []));
+  const [customers, setCustomers] = useState(() => {
+    const saved = loadJSON(CUSTOMERS_KEY, []);
+    return Array.isArray(saved) ? saved.map(cleanCustomerRecord).filter((customer) => customer.name) : [];
+  });
   const [activePage, setActivePage] = useState("products");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -937,14 +944,28 @@ function App() {
   const [pmReportText, setPmReportText] = useState("");
   const [expiryMonth, setExpiryMonth] = useState(() => todayISO().slice(0, 7));
   const [customerSearch, setCustomerSearch] = useState("");
-  const [customerMonth, setCustomerMonth] = useState(() => todayISO().slice(0, 7));
-  const [customerMonthOnly, setCustomerMonthOnly] = useState(false);
   const fileInputRef = React.useRef(null);
 
   const persistProducts = useCallback((next) => { setProducts(next); saveJSON(PRODUCTS_KEY, next); }, []);
   const persistPrices = useCallback((next) => { setPrices(next); saveJSON(PRICES_KEY, next); }, []);
   const persistCustomers = useCallback((next) => { setCustomers(next); saveJSON(CUSTOMERS_KEY, next); }, []);
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+  const productCustomerNames = useMemo(() => {
+    const names = new Map();
+    products.forEach((product) => (product.clients || []).forEach((client) => {
+      const name = String(client.name || "").trim();
+      const key = normalizedCustomerName(name);
+      if (key && !names.has(key)) names.set(key, name);
+    }));
+    return Array.from(names.values());
+  }, [products]);
+  useEffect(() => { saveJSON(CUSTOMERS_KEY, customers); }, [customers]);
+  useEffect(() => {
+    const knownNames = new Set(customers.map((customer) => normalizedCustomerName(customer.name)));
+    const missing = productCustomerNames.filter((name) => !knownNames.has(normalizedCustomerName(name)));
+    if (missing.length > 0) persistCustomers([...customers, ...missing.map((name) => cleanCustomerRecord({ name }))]);
+  }, [productCustomerNames, customers, persistCustomers]);
 
   const saveProduct = (p) => {
     const exists = products.some((x) => x.id === p.id);
@@ -959,11 +980,11 @@ function App() {
   };
   const deleteProduct = (id) => persistProducts(products.filter((x) => x.id !== id));
   const saveCustomer = (customer) => {
-    const exists = customers.some((item) => item.id === customer.id);
-    persistCustomers(exists ? customers.map((item) => item.id === customer.id ? customer : item) : [...customers, customer]);
+    const cleaned = cleanCustomerRecord(customer);
+    const exists = customers.some((item) => item.id === cleaned.id);
+    persistCustomers(exists ? customers.map((item) => item.id === cleaned.id ? cleaned : item) : [...customers, cleaned]);
     setCustomerFormOpen(false); setEditingCustomer(null); showToast("客戶資料已儲存");
   };
-  const deleteCustomer = (id) => persistCustomers(customers.filter((item) => item.id !== id));
   const setCompletionConfirmation = (id, confirmed, finalStatus = null) => {
     const next = products.map((p) => p.id === id
       ? {
@@ -1081,7 +1102,7 @@ function App() {
       const data = await parseBackupInput(await readBackupFile(file));
       persistProducts(data.products);
       persistPrices(data.prices);
-      persistCustomers(data.customers || []);
+      persistCustomers((data.customers || []).map(cleanCustomerRecord).filter((customer) => customer.name));
       setBackupModalOpen(false);
       showToast(`備份已匯入：${data.products.length} 筆商品、${(data.customers || []).length} 筆客戶`);
     } catch (e) {
@@ -1167,17 +1188,28 @@ function App() {
     className: `rounded-xl border px-3 py-3 cursor-pointer transition ${(key === "one_left" ? oneLeftOnly : activeFilter === key) ? "ring-2 ring-amber-400" : "hover:border-slate-400"} ${toneClasses[key === "upcoming" || key === "month" || key === "pending_docs" || key === "one_left" ? "warning" : key === "matured_shares" ? "danger" : "success"]}`
   });
 
-  const customerMonthCount = useMemo(
-    () => customers.filter((customer) => customerExpiresInMonth(customer, customerMonth)).length,
-    [customers, customerMonth]
-  );
+  const activeProductsByCustomer = useMemo(() => {
+    const map = new Map();
+    statuses.filter(({ status }) => ["live", "pending_docs"].includes(status.key)).forEach(({ p, status }) => {
+      const seenNames = new Set();
+      (p.clients || []).forEach((client) => {
+        const key = normalizedCustomerName(client.name);
+        if (!key || seenNames.has(key)) return;
+        seenNames.add(key);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ id: p.id, code: p.code || "未命名產品", structure: structureLabel(p), maturity: status.key === "live" ? maturityOf(p) : "" });
+      });
+    });
+    map.forEach((items) => items.sort((a, b) => compareProductCode(a.code, b.code)));
+    return map;
+  }, [statuses]);
   const visibleCustomers = useMemo(() => {
     const query = customerSearch.trim().toLocaleLowerCase("zh-Hant");
     return customers
       .filter((customer) => !query || String(customer.name || "").toLocaleLowerCase("zh-Hant").includes(query))
-      .filter((customer) => !customerMonthOnly || customerExpiresInMonth(customer, customerMonth))
-      .sort((a, b) => customerNextExpiry(a).localeCompare(customerNextExpiry(b)) || String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant"));
-  }, [customers, customerSearch, customerMonthOnly, customerMonth]);
+      .map((customer) => ({ ...customer, activeProducts: activeProductsByCustomer.get(normalizedCustomerName(customer.name)) || [] }))
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "zh-Hant"));
+  }, [customers, customerSearch, activeProductsByCustomer]);
   const staffDirectory = useMemo(() => {
     const map = new Map();
     customers.forEach((customer) => {
@@ -1491,13 +1523,7 @@ function App() {
             totalCount={customers.length}
             searchText={customerSearch}
             onSearch={setCustomerSearch}
-            month={customerMonth}
-            onMonth={setCustomerMonth}
-            monthOnly={customerMonthOnly}
-            onToggleMonth={() => setCustomerMonthOnly((value) => !value)}
-            monthCount={customerMonthCount}
             onEdit={(customer) => { setEditingCustomer(customer); setCustomerFormOpen(true); }}
-            onDelete={deleteCustomer}
           />
         )}
       </div>
@@ -1570,66 +1596,69 @@ function BackupModal({ onClose, onDownload, onShare, onImport }) {
   );
 }
 
-function CustomerPage({ customers, totalCount, searchText, onSearch, month, onMonth, monthOnly, onToggleMonth, monthCount, onEdit, onDelete }) {
+function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit }) {
   const permissionLabel = (key) => CUSTOMER_PERMISSIONS.find(([value]) => value === key)?.[1] || key;
   return (
     <div>
       <div className="utility-panel mb-4 rounded-2xl p-3.5 sm:p-4">
-        <div className="mb-3 text-sm text-slate-300">共 {totalCount} 位客戶</div>
-        <div className="grid gap-2.5 sm:grid-cols-[1fr_auto]">
-          <div className="relative">
-            <input value={searchText} onChange={(event) => onSearch(event.target.value)} placeholder="搜尋客戶姓名"
-              className="w-full rounded-xl border border-slate-600 bg-slate-900 px-3.5 py-2.5 pr-11 text-slate-50" />
-            {searchText && <button type="button" aria-label="清除客戶搜尋" onClick={() => onSearch("")}
-              className="absolute right-1.5 top-1/2 h-9 w-9 min-h-0 -translate-y-1/2 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
-          </div>
-          <div className="flex gap-2">
-            <input type="month" value={month} onChange={(event) => onMonth(event.target.value)}
-              className="min-w-0 flex-1 rounded-xl border border-slate-600 bg-slate-900 px-2.5 py-2 text-slate-50 font-num sm:w-40" />
-            <button type="button" aria-pressed={monthOnly} onClick={onToggleMonth}
-              className={`pencil-button shrink-0 rounded-xl px-3 py-2 text-sm ${monthOnly ? "bg-[#c0a87c] text-slate-950" : "bg-[#536468] text-slate-100"}`}>
-              本月到期 {monthCount}
-            </button>
-          </div>
+        <div className="mb-2.5 text-sm text-slate-300">從商品資料找到 {totalCount} 位客戶</div>
+        <div className="relative">
+          <input value={searchText} onChange={(event) => onSearch(event.target.value)} placeholder="搜尋客戶姓名"
+            className="w-full rounded-xl border border-slate-600 bg-slate-900 px-3.5 py-2.5 pr-11 text-slate-50" />
+          {searchText && <button type="button" aria-label="清除客戶搜尋" onClick={() => onSearch("")}
+            className="absolute right-1.5 top-1/2 h-9 w-9 min-h-0 -translate-y-1/2 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
         </div>
       </div>
 
       <div className="space-y-2.5">
         {customers.length === 0 && (
           <div className="rounded-2xl border border-dashed border-slate-600 py-16 text-center text-slate-300">
-            {searchText || monthOnly ? "沒有符合條件的客戶" : "尚未建立客戶資料"}
+            {searchText ? "沒有符合條件的客戶" : "商品資料中尚未找到客戶姓名"}
           </div>
         )}
         {customers.map((customer) => (
           <article key={customer.id} className="product-card rounded-2xl border p-3.5 sm:p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  <h2 className="text-lg font-semibold text-slate-50">{customer.name || "未命名客戶"}</h2>
-                  {customer.age && <span className="text-sm text-slate-300 font-num">{customer.age} 歲</span>}
-                </div>
-                <div className="mt-1 text-sm text-slate-300">共銷：{customer.coSalesName || "—"}{customer.unit ? `・${customer.unit}` : ""}</div>
-              </div>
-              <div className="flex shrink-0 items-center gap-3">
-                <button type="button" onClick={() => onEdit(customer)} className="text-slate-300"><IPencil /></button>
-                <button type="button" onClick={() => onDelete(customer.id)} className="text-[#e2aaa7]"><ITrash /></button>
-              </div>
+              <h2 className="min-w-0 break-words text-lg font-semibold text-slate-50">{customer.name || "未命名客戶"}</h2>
+              <button type="button" onClick={() => onEdit(customer)} className="flex shrink-0 items-center gap-1 text-sm text-slate-300"><IPencil />編輯</button>
             </div>
-            <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-xl bg-[#2f3a3e] px-3 py-2.5">
-                <div className="text-slate-400">專業投資人到期</div>
-                <div className="mt-0.5 text-slate-100 font-num">{fmtDate(customer.professionalExpiry)}</div>
+                <div className="text-slate-400">共銷人員</div>
+                <div className="mt-0.5 break-words text-slate-100">{customer.coSalesName || "—"}</div>
               </div>
               <div className="rounded-xl bg-[#2f3a3e] px-3 py-2.5">
-                <div className="text-slate-400">高資產客戶到期</div>
-                <div className="mt-0.5 text-slate-100 font-num">{fmtDate(customer.highAssetExpiry)}</div>
+                <div className="text-slate-400">單位</div>
+                <div className="mt-0.5 break-words text-slate-100">{customer.unit || "—"}</div>
               </div>
             </div>
+            <div className="mt-3 text-sm text-slate-400">交易權限</div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {(customer.permissions || []).length > 0 ? customer.permissions.map((permission) => (
                 <span key={permission} className="rounded-full border border-[#93a493] bg-[#53645b] px-2.5 py-1 text-xs text-[#edf1e8]">{permissionLabel(permission)}</span>
               )) : <span className="text-sm text-slate-400">尚未設定交易權限</span>}
             </div>
+            <div className="mt-4 border-t border-slate-700 pt-3">
+              <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+                <span className="text-slate-300">存續中商品</span>
+                <span className="rounded-full bg-[#536468] px-2.5 py-0.5 font-num text-slate-100">{customer.activeProducts.length}</span>
+              </div>
+              {customer.activeProducts.length > 0 ? (
+                <div className="space-y-1.5">
+                  {customer.activeProducts.map((product) => (
+                    <div key={product.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-[#2f3a3e] px-3 py-2 text-sm">
+                      <span className="font-num text-slate-100">{product.code}</span>
+                      <span className="text-slate-400">{product.structure}{product.maturity ? `・${fmtDate(product.maturity)}` : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="text-sm text-slate-400">目前沒有存續中商品</div>}
+            </div>
+            {customer.notes && (
+              <div className="mt-3 rounded-xl border border-slate-700 bg-[#344044] px-3 py-2.5 text-sm text-slate-300">
+                <span className="text-slate-400">備註：</span>{customer.notes}
+              </div>
+            )}
           </article>
         ))}
       </div>
@@ -1656,14 +1685,7 @@ function CustomerForm({ customer, staffDirectory, onCancel, onSave }) {
           <button type="button" aria-label="關閉" onClick={onCancel} className="h-9 w-9 min-h-0 rounded-lg text-slate-300"><IX2 /></button>
         </div>
         <div className="space-y-4 p-4">
-          <Row2>
-            <TextInput label="客戶姓名" value={record.name} onChange={(value) => update("name", value)} />
-            <TextInput label="年齡" type="number" min="0" value={record.age} onChange={(value) => update("age", value)} />
-          </Row2>
-          <Row2>
-            <TextInput label="專業投資人到期日" type="date" value={record.professionalExpiry} onChange={(value) => update("professionalExpiry", value)} />
-            <TextInput label="高資產客戶到期日" type="date" value={record.highAssetExpiry} onChange={(value) => update("highAssetExpiry", value)} />
-          </Row2>
+          <TextInput label="客戶姓名" value={record.name} onChange={(value) => update("name", value)} />
           <div>
             <div className="mb-2 text-sm text-slate-300">交易權限</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -1689,6 +1711,11 @@ function CustomerForm({ customer, staffDirectory, onCancel, onSave }) {
               <datalist id="unit-directory">{Array.from(new Set(staffDirectory.map((staff) => staff.unit).filter(Boolean))).map((unit) => <option key={unit} value={unit} />)}</datalist>
             </label>
           </Row2>
+          <label className="block">
+            <div className="mb-1 text-sm text-slate-400">備註</div>
+            <textarea value={record.notes} onChange={(event) => update("notes", event.target.value)} rows="3"
+              className="w-full resize-y rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-base text-slate-100" />
+          </label>
         </div>
         <div className="sticky bottom-0 flex gap-2 border-t border-slate-700 bg-[#3b484c] px-4 py-3.5">
           <button type="button" onClick={onCancel} className="flex-1 rounded-xl border border-slate-600 py-2.5 text-slate-300">取消</button>
