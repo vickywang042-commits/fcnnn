@@ -797,14 +797,10 @@ function productImageSnapshot(p, status, prices) {
   const totals = Object.entries(totalsByCurrency(p)).map(([currency, amount]) => `${FcnTools.amountInWan(amount)} ${currency}`).join(" / ");
   if (totals) sections[0].lines.push(`分幣別合計：${totals}`);
   if (status.key !== "pending_docs") {
-    const mode = isStepdown(p) ? (stepdownModeOf(p) === "period_end_memory" ? "Period End Memory" : "Period End") : (fcnModeOf(p) === "daily_memory" ? "Daily Memory" : "Daily");
-    sections.push({ title: "商品條款", lines: [
-      `架構 ${structureLabel(p)}　出場模式 ${mode}　商品幣別 ${p.currency || "USD"}`,
+    sections.push({ title: "重要日期", lines: [
       `交易日 ${fmtDate(p.tradeDate)}　商品天期 ${p.tenorMonths || "—"} 個月`,
       `開始比價日 ${p.startObsDate ? fmtDate(p.startObsDate) : isStepdown(p) ? "見觀察日" : "—"}`,
       `期末評價日 ${fmtDate(maturityOf(p))}`,
-      `年化配息 ${p.couponRate || "—"}%　保證領息 ${guaranteedCouponMonthsOf(p)} 個月`,
-      `初始 KO ${p.autocallPct}%　執行價 ${p.strikePct}%　${kiTypeOf(p) === "NONE" ? "None" : `${kiTypeOf(p)} ${p.kiPct}%`}`,
     ] });
     if (isStepdown(p)) sections.push({ title: `每月觀察日｜每月下降 ${p.stepDownPct || 0}%`, lines: observationSchedule(p).map((obs) => {
       const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
@@ -812,13 +808,12 @@ function productImageSnapshot(p, status, prices) {
     }) });
     if (structureOf(p) === "EXPRESS_FCN") sections.push({ title: "首月觀察", lines: [`第一個月觀察日結束 ${fmtDate(p.firstMonthObsEnd)}`] });
     (p.underlyings || []).forEach((u, index) => {
-      const lp = latestPriceFor(u.symbol, prices), lv = levelsFor(p, u);
+      const lp = latestPriceFor(u.symbol, prices);
       const comparable = lp ? comparableCloseFor(p, u, lp.date, prices) : null;
       const ratio = comparable !== null && Number(u.entryPrice) > 0 ? `${(comparable / Number(u.entryPrice) * 100).toFixed(1)}%` : "—";
       const hit = status.koProgress?.hits?.[index];
-      const lines = [`期初股價 ${fmtPrice(u.entryPrice)}`, lp ? `最新收盤 ${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "尚無正式收盤價",
-        `初始 KO價 ${fmtPrice(lv.ko)}　執行價 ${fmtPrice(lv.strike)}${kiTypeOf(p) !== "NONE" ? `　${kiTypeOf(p)}價 ${fmtPrice(lv.ki)}` : ""}`];
-      if (hit) lines.push(`KO ${hit.hit ? `✓ 已達標　${fmtDate(hit.date)}` : "尚未達標"}${hit.thresholdPct != null ? `　門檻 ${hit.thresholdPct}%` : ""}`);
+      const lines = [`期初股價 ${fmtPrice(u.entryPrice)}`, lp ? `最新收盤 ${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "尚無正式收盤價"];
+      if (hit) lines.push(`KO ${hit.hit ? `✓ 已達 KO　${fmtDate(hit.date)}` : "○ 尚未達 KO"}${hit.thresholdPct != null ? `　門檻 ${hit.thresholdPct}%` : ""}`);
       if (kiTypeOf(p) === "AKI") { const aki = akiHitForUnderlying(p, u, prices); lines.push(`AKI ${aki.hit ? `已觸發　${fmtDate(aki.date)}` : "尚未觸發"}`); }
       const splits = relevantSplitsFor(p, u, prices, lp?.date || "9999-12-31");
       if (splits.length) lines.push(`拆股換算：${splits.map((event) => `${fmtDate(event.date)} ${event.ratio || `${event.numerator}:${event.denominator}`}`).join("、")}`);
@@ -826,8 +821,7 @@ function productImageSnapshot(p, status, prices) {
     });
   }
   if (p.notes) sections.push({ title: "備註", lines: [p.notes] });
-  return { title: `${p.code || "未命名商品"}（${structureLabel(p)}）`, status: `${status.label}${p.completionConfirmed ? " · 已確認結案" : ""}${status.date ? ` · ${fmtDate(status.date)}` : ""}`, sections,
-    footer: `產生日期 ${fmtDate(todayISO())}｜收盤依標的市場；期末 KO → KI → 執行價` };
+  return { title: p.code || "未命名商品", status: `${status.label}${p.completionConfirmed ? " · 已確認結案" : ""}${status.date ? ` · ${fmtDate(status.date)}` : ""}`, sections };
 }
 function fallbackCopyText(text) {
   const textarea = document.createElement("textarea");
@@ -1537,9 +1531,9 @@ function App() {
                       <div className="grid gap-2 sm:grid-cols-2">
                         {observationSchedule(p).map((obs) => {
                           const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
-                          return <div key={obs.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-sm">
+                          return <div key={obs.id} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-sm ${check?.complete ? "border-emerald-500 bg-emerald-950/70" : check ? "border-amber-500 bg-amber-950/60" : "border-slate-700 bg-slate-900"}`}>
                             <span>第 {obs.monthNumber} 月・{obs.date ? fmtDate(obs.date) : "未填日期"}</span>
-                            <span className={check?.complete ? "text-emerald-300" : "text-amber-300"}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 全數達標" : "已比價") : ""}</span>
+                            <span className={`font-semibold ${check?.complete ? "text-emerald-200" : "text-amber-200"}`}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 已達 KO" : "○ 未達 KO") : ""}</span>
                           </div>;
                         })}
                       </div>
@@ -1550,7 +1544,7 @@ function App() {
                     <div className="text-base text-slate-200 mb-2 flex flex-wrap items-center gap-2">
                       <span>標的現況</span>
                       {isAutoCallable(p) && status.koProgress && (
-                        <span className="text-sm text-amber-300 bg-amber-950/60 border border-amber-700 rounded-full px-2.5 py-1">
+                        <span className={`rounded-full border px-3 py-1 text-sm font-semibold ${status.koProgress.complete ? "border-emerald-400 bg-emerald-900/80 text-emerald-100" : "border-amber-400 bg-amber-900/80 text-amber-100"}`}>
                           {(isStepdown(p) ? stepdownModeOf(p) === "period_end_memory" : fcnModeOf(p) === "daily_memory") ? "曾於收盤達標" : isStepdown(p) ? "最近觀察日達標" : "今日收盤達標"}：{status.koProgress.hitCount}/{status.koProgress.total}
                         </span>
                       )}
@@ -1582,9 +1576,12 @@ function App() {
                               </div>
                             </div>
                             {koHit && (
-                              <div className={`mt-2 text-sm font-medium ${koHit.hit ? "text-emerald-300" : "text-amber-300"}`}>
-                                {koHit.hit ? <ICheck size={14} /> : <IClock size={14} />} {koHit.rule}
-                                {koHit.hit && `：${fmtDate(koHit.date)}，收盤價 ${Number(koHit.price).toFixed(2)}`}
+                              <div className={`mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2 text-sm font-medium ${koHit.hit ? "border-emerald-400 bg-emerald-900/75 text-emerald-50" : "border-amber-400 bg-amber-900/70 text-amber-50"}`}>
+                                <span className="inline-flex items-center gap-1 font-bold">
+                                  {koHit.hit ? <ICheck size={16} /> : <IClock size={16} />} {koHit.hit ? "已達 KO" : "尚未達 KO"}
+                                </span>
+                                <span className={koHit.hit ? "text-emerald-100" : "text-amber-100"}>{koHit.rule}</span>
+                                {koHit.hit && <span className="font-num text-emerald-100">{fmtDate(koHit.date)}・收盤價 {fmtPrice(koHit.price)}</span>}
                               </div>
                             )}
                             {akiHit && (
