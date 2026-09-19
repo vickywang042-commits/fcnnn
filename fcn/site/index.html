@@ -92,6 +92,7 @@
 <body>
 <div id="root"></div>
 <script src="/tracker-tools.js"></script>
+<script src="/product-ocr.js"></script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -397,7 +398,6 @@ function trustedCloseForDate(value, date, symbol = "") {
   // a pre-market daily candle as official. A refresh with the new function
   // replaces them with a versioned completed-close record.
   if (isObject && value.officialClose === true) {
-    if (date < "2026-09-08") return close;
     return value.closeVerification === "completed-daily-v3" ? close : null;
   }
   if (age >= 0 && age <= 2) return null;
@@ -727,7 +727,9 @@ const pmOutcomeLabels = {
   unknown: "未辨識結果",
 };
 function parsePmReport(text) {
-  const source = String(text || "");
+  const source = String(text || "").normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u3000\t]+/g, " ");
   const matches = Array.from(source.matchAll(/(?:MA)?\d{4}SN\d{2,6}/gi));
   const entries = matches.map((match, index) => {
     const segment = source.slice(match.index + match[0].length, matches[index + 1]?.index ?? source.length);
@@ -981,6 +983,7 @@ function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
+  const [ocrModalOpen, setOcrModalOpen] = useState(false);
   const [textResult, setTextResult] = useState(null);
   const [imageExport, setImageExport] = useState(null);
   const [imageBusyId, setImageBusyId] = useState(null);
@@ -995,6 +998,8 @@ function App() {
   const [pmReportText, setPmReportText] = useState("");
   const [expiryMonth, setExpiryMonth] = useState(() => todayISO().slice(0, 7));
   const [customerSearch, setCustomerSearch] = useState("");
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const fileInputRef = React.useRef(null);
 
   const persistProducts = useCallback((next) => { setProducts(next); saveJSON(PRODUCTS_KEY, next); }, []);
@@ -1002,6 +1007,16 @@ function App() {
   const persistCustomers = useCallback((next) => { setCustomers(next); saveJSON(CUSTOMERS_KEY, next); }, []);
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
   useEffect(() => () => { if (imageExport?.url) URL.revokeObjectURL(imageExport.url); }, [imageExport]);
+  useEffect(() => {
+    const updateBackToTop = () => setShowBackToTop(window.scrollY > 600);
+    updateBackToTop();
+    window.addEventListener("scroll", updateBackToTop, { passive: true });
+    return () => window.removeEventListener("scroll", updateBackToTop);
+  }, []);
+  const goToPage = (page) => {
+    setActivePage(page);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
   const copyTextResult = async (text, title) => {
     if (!text) return;
     try {
@@ -1012,7 +1027,7 @@ function App() {
       let copied = false;
       try { copied = fallbackCopyText(text); } catch (_) {}
       if (copied) showToast(`${title}已複製`);
-      else { setBonusModalOpen(false); setTextResult({ title, text }); }
+      else { setBonusModalOpen(false); setOcrModalOpen(false); setTextResult({ title, text }); }
     }
   };
   const exportProductImage = async (p, status) => {
@@ -1081,7 +1096,7 @@ function App() {
         }
       : p);
     persistProducts(next);
-    showToast(confirmed ? "已確認結案；分類清單將不再顯示此商品" : "已取消確認；商品已恢復至分類清單");
+    showToast(confirmed ? "已移至已確認結案" : "已取消確認；商品已回到 FCN 記錄");
   };
 
   const allSymbols = useMemo(() => {
@@ -1199,12 +1214,19 @@ function App() {
     const today = todayISO();
     return products.map((p) => ({ p, status: computeStatus(p, prices, today) }));
   }, [products, prices]);
+  const activeStatuses = useMemo(() => statuses.filter(({ p }) => !p.completionConfirmed), [statuses]);
+  const archivedStatuses = useMemo(() => statuses.filter(({ p }) => p.completionConfirmed).sort((a, b) => {
+    const confirmedOrder = String(b.p.completionConfirmedAt || "").localeCompare(String(a.p.completionConfirmedAt || ""));
+    if (confirmedOrder !== 0) return confirmedOrder;
+    const maturityOrder = String(maturityOf(b.p) || "").localeCompare(String(maturityOf(a.p) || ""));
+    return maturityOrder || compareProductCode(a.p.code, b.p.code);
+  }), [statuses]);
 
   const pmComparison = useMemo(() => {
     const reportEntries = parsePmReport(pmReportText);
     if (reportEntries.length === 0) return null;
-    return comparePmReportWithClientProducts(reportEntries, statuses);
-  }, [pmReportText, statuses]);
+    return comparePmReportWithClientProducts(reportEntries, activeStatuses);
+  }, [pmReportText, activeStatuses]);
   const pmCopyText = useMemo(() => buildPmCopyText(pmComparison?.consistent || []), [pmComparison]);
   const copyPmResult = async () => {
     if (!pmCopyText) return;
@@ -1220,32 +1242,33 @@ function App() {
   };
 
   const buckets = useMemo(() => {
-    const unconfirmed = (key) => statuses.filter((s) => s.status.key === key && !s.p.completionConfirmed);
-    const called = unconfirmed("called");
-    const maturedPar = unconfirmed("matured_par");
-    const maturedShares = unconfirmed("matured_shares");
-    const pendingDocs = statuses.filter((s) => s.status.key === "pending_docs");
-    const oneLeft = statuses.filter((s) => isOneUnderlyingFromCall(s.status));
-    const upcoming = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+    const byStatus = (key) => activeStatuses.filter((s) => s.status.key === key);
+    const called = byStatus("called");
+    const maturedPar = byStatus("matured_par");
+    const maturedShares = byStatus("matured_shares");
+    const pendingDocs = byStatus("pending_docs");
+    const oneLeft = activeStatuses.filter((s) => isOneUnderlyingFromCall(s.status));
+    const upcoming = activeStatuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
       .sort((a, b) => a.status.daysToNext - b.status.daysToNext);
-    const month = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+    const month = activeStatuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
       .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
     return { called, maturedPar, maturedShares, pendingDocs, oneLeft, upcoming, month };
-  }, [statuses, expiryMonth]);
+  }, [activeStatuses, expiryMonth]);
 
-  // exited products (already called / matured) sink to the bottom; live ones sort by soonest maturity
+  // Confirmed closures live on the separate archive page; the working list only
+  // contains records that may still need action.
   const filteredByPrimary = useMemo(() => {
-    let result = statuses;
-    if (activeFilter === "called") result = statuses.filter((s) => s.status.key === "called" && !s.p.completionConfirmed);
-    else if (activeFilter === "matured_par") result = statuses.filter((s) => s.status.key === "matured_par" && !s.p.completionConfirmed);
-    else if (activeFilter === "matured_shares") result = statuses.filter((s) => s.status.key === "matured_shares" && !s.p.completionConfirmed);
-    else if (activeFilter === "pending_docs") result = statuses.filter((s) => s.status.key === "pending_docs");
-    else if (activeFilter === "upcoming") result = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+    let result = activeStatuses;
+    if (activeFilter === "called") result = activeStatuses.filter((s) => s.status.key === "called");
+    else if (activeFilter === "matured_par") result = activeStatuses.filter((s) => s.status.key === "matured_par");
+    else if (activeFilter === "matured_shares") result = activeStatuses.filter((s) => s.status.key === "matured_shares");
+    else if (activeFilter === "pending_docs") result = activeStatuses.filter((s) => s.status.key === "pending_docs");
+    else if (activeFilter === "upcoming") result = activeStatuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
       .sort((a,b) => a.status.daysToMaturity - b.status.daysToMaturity);
-    else if (activeFilter === "month") result = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+    else if (activeFilter === "month") result = activeStatuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
       .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
     return result;
-  }, [statuses, activeFilter, expiryMonth]);
+  }, [activeStatuses, activeFilter, expiryMonth]);
   const contextualOneLeftCount = useMemo(
     () => filteredByPrimary.filter((item) => isOneUnderlyingFromCall(item.status)).length,
     [filteredByPrimary]
@@ -1259,10 +1282,8 @@ function App() {
     const searched = filteredStatuses.filter(({ p }) => FcnTools.productMatchesSearch(p, searchText));
     const rank = { pending_docs: 0, live: 1, called: 2, matured_par: 2, matured_shares: 2, matured_pending: 2 };
     return [...searched].sort((a, b) => {
-      // Confirmed records remain visible for audit purposes, but always sit
-      // beneath all products that still need daily attention.
-      const ra = a.p.completionConfirmed ? 3 : (rank[a.status.key] ?? 2);
-      const rb = b.p.completionConfirmed ? 3 : (rank[b.status.key] ?? 2);
+      const ra = rank[a.status.key] ?? 2;
+      const rb = rank[b.status.key] ?? 2;
       if (ra !== rb) return ra - rb;
       if (activeFilter === "upcoming" || activeFilter === "month") return maturityOf(a.p).localeCompare(maturityOf(b.p));
       return compareProductCode(a.p.code, b.p.code);
@@ -1314,7 +1335,9 @@ function App() {
           <div className="flex items-center gap-3 min-w-0">
             <img src="/icon-192.png" alt="" className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl shrink-0 shadow-lg shadow-cyan-950/40" />
             <div>
-              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">{activePage === "products" ? "FCN記錄" : "客戶資料"}</h1>
+              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">
+                {activePage === "products" ? "FCN記錄" : activePage === "customers" ? "客戶資料" : "已確認結案"}
+              </h1>
               <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
             </div>
           </div>
@@ -1324,11 +1347,15 @@ function App() {
               <IRefresh className={refreshing ? "animate-spin" : ""} />
               <span className="mobile-action-label">今日更新</span>
             </button>
-          ) : (
+          ) : activePage === "customers" ? (
             <button onClick={() => { setEditingCustomer(emptyCustomerRecord()); setCustomerFormOpen(true); }}
               className="pencil-button flex items-center gap-2 bg-[#9eb09d] text-slate-950 font-semibold px-3 py-2.5 rounded-xl shrink-0">
               <IPlus /> 新增客戶
             </button>
+          ) : (
+            <div className="shrink-0 rounded-xl border border-slate-600 bg-slate-800/70 px-3 py-2 text-sm text-slate-200">
+              <span className="font-num text-lg font-semibold">{archivedStatuses.length}</span> 檔
+            </div>
           )}
         </div>
 
@@ -1362,6 +1389,7 @@ function App() {
             <IPlus /> 新增產品
           </button>
           <button onClick={() => setBonusModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▤ 獎金計算</button>
+          <button onClick={() => setOcrModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▧ 辨識商品</button>
           <button onClick={() => setBackupModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">
             <IArchive /> 備份與還原
           </button>
@@ -1584,9 +1612,6 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="text-sm text-slate-400 mb-4 bg-slate-950 rounded-lg px-3 py-2 leading-relaxed">
-                    期末先 KO，再 KI，最後執行價。收盤時間依連結標的市場，與幣別無關。{kiTypeOf(p) === "EKI" ? " EKI 期末觀察。" : kiTypeOf(p) === "AKI" ? " AKI 從交易日至期末監測。" : ""}
-                  </div>
                   </>}
 
                   {p.notes && <div className="text-sm text-slate-400 mb-3">備註：{p.notes}</div>}
@@ -1613,13 +1638,25 @@ function App() {
             </div>
           ))}
         </div>
-        </> : (
+        </> : activePage === "customers" ? (
           <CustomerPage
             customers={visibleCustomers}
             totalCount={customers.length}
             searchText={customerSearch}
             onSearch={setCustomerSearch}
             onEdit={(customer) => { setEditingCustomer(customer); setCustomerFormOpen(true); }}
+          />
+        ) : (
+          <ConfirmedArchivePage
+            items={archivedStatuses}
+            searchText={archiveSearch}
+            onSearch={setArchiveSearch}
+            prices={prices}
+            imageBusyId={imageBusyId}
+            onExportImage={exportProductImage}
+            onEdit={(p) => { setEditing(p); setShowForm(true); }}
+            onUnconfirm={(p) => setCompletionConfirmation(p.id, false)}
+            onDelete={(p) => deleteProduct(p.id)}
           />
         )}
       </div>
@@ -1652,6 +1689,7 @@ function App() {
           onImport={() => fileInputRef.current?.click()} />
       )}
       {bonusModalOpen && <BonusModal onClose={() => setBonusModalOpen(false)} onCopy={copyTextResult} />}
+      {ocrModalOpen && <ProductOcrModal onClose={() => setOcrModalOpen(false)} onCopy={copyTextResult} />}
       {textResult && <SmallModal title={textResult.title} onClose={() => setTextResult(null)}>
         <div className="mb-3 text-sm text-slate-300">請長按下方文字複製。</div>
         <pre className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap break-words text-base leading-relaxed text-slate-100 font-body select-text">{textResult.text}</pre>
@@ -1666,12 +1704,20 @@ function App() {
       <input ref={fileInputRef} type="file" className="hidden"
         onChange={async (e) => { const file = e.target.files?.[0]; if (file) await importBackup(file); e.target.value = ""; }} />
 
+      {showBackToTop && (
+        <button type="button" aria-label="回到頁面頂端" title="回到頂端" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed right-4 z-30 flex h-11 w-11 min-h-0 items-center justify-center rounded-full border border-slate-500 bg-[#526267]/95 text-xl text-slate-50 shadow-lg backdrop-blur-sm"
+          style={{ bottom: "calc(5.25rem + env(safe-area-inset-bottom))" }}>↑</button>
+      )}
+
       <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40">
-        <div className="mx-auto grid max-w-md grid-cols-2 gap-2 px-4 pt-2">
-          <button type="button" aria-current={activePage === "products" ? "page" : undefined} onClick={() => setActivePage("products")}
+        <div className="mx-auto grid max-w-lg grid-cols-3 gap-1.5 px-3 pt-2">
+          <button type="button" aria-current={activePage === "products" ? "page" : undefined} onClick={() => goToPage("products")}
             className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IHome size={21} />FCN</button>
-          <button type="button" aria-current={activePage === "customers" ? "page" : undefined} onClick={() => setActivePage("customers")}
+          <button type="button" aria-current={activePage === "customers" ? "page" : undefined} onClick={() => goToPage("customers")}
             className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IUsers size={21} />客戶</button>
+          <button type="button" aria-current={activePage === "archive" ? "page" : undefined} onClick={() => goToPage("archive")}
+            className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IArchive size={20} />結案</button>
         </div>
       </nav>
 
@@ -1728,6 +1774,55 @@ function BonusModal({ onClose, onCopy }) {
     </div>}
   </SmallModal>;
 }
+function ProductOcrModal({ onClose, onCopy }) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [progress, setProgress] = useState(null);
+  const [result, setResult] = useState("");
+  const [missing, setMissing] = useState([]);
+  const [error, setError] = useState("");
+  const galleryRef = React.useRef(null), cameraRef = React.useRef(null);
+  const controllerRef = React.useRef(null);
+  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+  const recognize = async (file) => {
+    if (!file) return;
+    controllerRef.current?.abort();
+    const controller = new AbortController(); controllerRef.current = controller;
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(file)); setProgress({ label: "整理圖片", percent: 0.02 });
+    setResult(""); setMissing([]); setError("");
+    try {
+      const recognized = await FcnProductOcr.recognizeProductImage(file, setProgress, controller.signal);
+      if (controller.signal.aborted) return;
+      setResult(recognized.formatted); setMissing(recognized.parsed.missing || []); setProgress(null);
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === "AbortError") return;
+      setProgress(null); setError("無法完成辨識。請確認網路連線、圖片格式，再重新選擇一次。");
+    }
+  };
+  const choose = (event) => { const file = event.target.files?.[0]; event.target.value = ""; recognize(file); };
+  return <SmallModal title="辨識商品" onClose={onClose}>
+    <div className="mb-3 text-sm leading-relaxed text-slate-300">請讓條件表格保持清楚、端正，並盡量裁掉背景。辨識完成後請核對內容。</div>
+    <div className="grid grid-cols-2 gap-2">
+      <button type="button" onClick={() => galleryRef.current?.click()} className="pencil-button rounded-lg bg-[#65787c] px-3 py-2.5 text-slate-100">選擇圖片</button>
+      <button type="button" onClick={() => cameraRef.current?.click()} className="pencil-button rounded-lg bg-[#9eb09d] px-3 py-2.5 text-slate-950">開啟相機</button>
+    </div>
+    <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={choose} />
+    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choose} />
+    {previewUrl && <img src={previewUrl} alt="待辨識商品圖片" className="mt-3 max-h-36 w-full rounded-lg bg-slate-950 object-contain" />}
+    {progress && <div className="mt-3 rounded-lg bg-slate-950 p-3">
+      <div className="mb-2 flex justify-between text-sm text-slate-300"><span>{progress.label}</span><span>{Math.round((progress.percent || 0) * 100)}%</span></div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-[#9eb09d] transition-all" style={{ width: `${Math.max(3, Math.round((progress.percent || 0) * 100))}%` }} /></div>
+    </div>}
+    {error && <div className="mt-3 rounded-lg border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-100">{error}</div>}
+    {result && <div className="mt-3">
+      {missing.length > 0 && <div className="mb-2 rounded-lg border border-amber-700 bg-amber-950/40 p-2.5 text-sm text-amber-100">尚未確定：{missing.join("、")}。請在下方直接修正。</div>}
+      <textarea aria-label="辨識結果" value={result} onChange={(event) => setResult(event.target.value)} rows="15"
+        className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950 px-3 py-3 text-base leading-relaxed text-slate-100 font-body" />
+      <button type="button" onClick={() => onCopy(result, "辨識結果")} className="pencil-button mt-2 w-full rounded-lg bg-[#9eb09d] px-3 py-2.5 text-base text-slate-950">複製格式</button>
+    </div>}
+  </SmallModal>;
+}
 function BackupModal({ onClose, onDownload, onShare, onImport }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-3 sm:items-center" onClick={onClose}>
@@ -1743,6 +1838,122 @@ function BackupModal({ onClose, onDownload, onShare, onImport }) {
           <button type="button" onClick={() => onShare("word")} className="pencil-button rounded-xl bg-[#596d71] px-3 py-3 text-slate-50"><IUpload /> 分享 Word</button>
           <button type="button" onClick={onImport} className="pencil-button col-span-2 rounded-xl bg-[#9eb09d] px-3 py-3 font-semibold text-slate-950"><IUpload /> 匯入還原</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmedArchivePage({ items, searchText, onSearch, prices, imageBusyId, onExportImage, onEdit, onUnconfirm, onDelete }) {
+  const [expanded, setExpanded] = useState({});
+  const query = String(searchText || "").trim().toLocaleLowerCase("zh-Hant");
+  const visibleItems = useMemo(() => items.filter(({ p, status }) => {
+    if (!query) return true;
+    const searchable = [
+      p.code, p.currency, structureLabel(p), status.label, p.notes,
+      ...(p.clients || []).flatMap((client) => [client.name, client.currency]),
+      ...(p.underlyings || []).flatMap((underlying) => [underlying.name, underlying.symbol]),
+    ].filter(Boolean).join(" ").toLocaleLowerCase("zh-Hant");
+    return searchable.includes(query);
+  }), [items, query]);
+
+  return (
+    <div>
+      <div className="utility-panel mb-4 rounded-2xl p-3.5 sm:p-4">
+        <div className="mb-2.5 flex items-center justify-between gap-3 text-sm text-slate-300">
+          <span>已確認結案共 {items.length} 檔</span>
+          <span className="text-slate-400">保留完整記錄</span>
+        </div>
+        <div className="relative">
+          <input value={searchText} onChange={(event) => onSearch(event.target.value)} placeholder="搜尋商品代號、客戶、幣別或標的"
+            className="w-full rounded-xl border border-slate-600 bg-slate-900 px-3.5 py-2.5 pr-11 text-slate-50" />
+          {searchText && <button type="button" aria-label="清除結案搜尋" onClick={() => onSearch("")}
+            className="absolute right-1.5 top-1/2 h-9 w-9 min-h-0 -translate-y-1/2 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        {visibleItems.length === 0 && (
+          <div className="rounded-2xl border border-dashed border-slate-600 py-16 text-center text-slate-300">
+            {searchText ? "沒有符合搜尋條件的結案商品" : "尚無已確認結案的商品"}
+          </div>
+        )}
+        {visibleItems.map(({ p, status }) => {
+          const open = Boolean(expanded[p.id]);
+          return (
+            <article key={p.id} className="product-card overflow-hidden rounded-2xl border">
+              <button type="button" onClick={() => setExpanded((previous) => ({ ...previous, [p.id]: !open }))}
+                className="flex w-full min-h-0 flex-col items-stretch gap-2.5 rounded-none px-3.5 py-3 text-left sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="break-words font-num text-lg font-semibold text-slate-50 sm:text-xl">{p.code || "未命名產品"}</div>
+                  <div className="mt-0.5 break-words text-sm text-slate-400">
+                    {structureLabel(p)} ・ {(p.clients || []).map((client) => client.name).filter(Boolean).join("、") || "—"}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <span className={`rounded-full border px-2.5 py-1 text-sm font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
+                  <span className="rounded-full border border-slate-600 bg-slate-800 px-2.5 py-1 text-xs text-slate-300">
+                    {p.completionConfirmedAt ? `${fmtDate(p.completionConfirmedAt)} 確認` : "已確認"}
+                  </span>
+                  <span className="ml-auto sm:ml-0">{open ? <IChevUp className="text-slate-500" /> : <IChevDown className="text-slate-500" />}</span>
+                </div>
+              </button>
+
+              {open && (
+                <div className="border-t border-slate-700 px-3.5 pb-4 pt-3.5">
+                  <div className="mb-4">
+                    <div className="mb-1.5 text-sm text-slate-400">客戶與投入金額</div>
+                    <div className="space-y-1">
+                      {(p.clients || []).map((client) => (
+                        <div key={client.id || `${client.name}-${client.amount}`} className="flex justify-between gap-3 rounded-lg bg-slate-950/60 px-3 py-2 text-sm">
+                          <span className="break-words text-slate-300">{client.name || "—"}</span>
+                          <span className="shrink-0 font-num text-slate-300">{client.amount ? Number(client.amount).toLocaleString() : "—"} {client.currency || p.currency || "USD"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mb-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
+                    <Field label="結案結果" value={status.label} />
+                    <Field label="期末評價日" value={fmtDate(maturityOf(p))} />
+                    <Field label="商品幣別" value={p.currency || "USD"} />
+                    <Field label="商品架構" value={structureLabel(p)} />
+                    <Field label="年化配息" value={p.couponRate ? `${p.couponRate}%` : "—"} />
+                    <Field label="保證領息" value={`${guaranteedCouponMonthsOf(p)} 個月`} />
+                    <Field label="出場價" value={`${p.autocallPct}%`} />
+                    <Field label="執行價" value={`${p.strikePct}%`} />
+                    <Field label="KI 類型" value={kiTypeOf(p) === "NONE" ? "None" : `${kiTypeOf(p)} ${p.kiPct}%`} />
+                  </div>
+
+                  {(p.underlyings || []).length > 0 && (
+                    <div className="mb-4">
+                      <div className="mb-2 text-sm text-slate-400">連結標的</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(p.underlyings || []).map((underlying) => {
+                          const latest = latestPriceFor(underlying.symbol, prices);
+                          return <div key={underlying.id || underlying.symbol} className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2.5 text-sm">
+                            <div className="font-num text-slate-100">{underlying.name || underlying.symbol || "—"} <span className="text-slate-400">{underlying.symbol}</span></div>
+                            <div className="mt-1 text-slate-400">進場 {fmtPrice(underlying.entryPrice)}・{latest ? `最新收盤 ${fmtPrice(latest.price)}（${fmtDate(latest.date)}）` : "尚無正式收盤價"}</div>
+                          </div>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {p.notes && <div className="mb-4 rounded-xl border border-slate-700 bg-[#344044] px-3 py-2.5 text-sm text-slate-300"><span className="text-slate-400">備註：</span>{p.notes}</div>}
+
+                  <div className="flex flex-wrap items-center gap-3 border-t border-slate-700 pt-3">
+                    <button type="button" disabled={imageBusyId === p.id} onClick={() => onExportImage(p, status)}
+                      className="text-sm text-cyan-200 hover:text-cyan-100 disabled:opacity-50">▧ {imageBusyId === p.id ? "產生中…" : "匯出圖片"}</button>
+                    <button type="button" onClick={() => onEdit(p)} className="flex items-center gap-1 text-sm text-slate-300 hover:text-slate-100"><IPencil size={14} />編輯</button>
+                    <button type="button" onClick={() => onUnconfirm(p)} className="text-sm text-amber-200 hover:text-amber-100">↩ 取消確認</button>
+                    <button type="button" onClick={() => { if (window.confirm(`確定刪除 ${p.code || "這筆商品"}？`)) onDelete(p); }}
+                      className="flex items-center gap-1 text-sm text-rose-300 hover:text-rose-200"><ITrash size={14} />刪除</button>
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
     </div>
   );

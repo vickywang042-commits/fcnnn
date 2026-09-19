@@ -17,7 +17,9 @@
     const amount = decimalParts(input);
     if (!amount) return null;
     const { units, scale } = amount;
-    const rate = units <= 30000n * scale ? 10 : units <= 100000n * scale ? 14 : units <= 200000n * scale ? 16 : 18;
+    // Boundary amounts belong to the higher tier: 30,000→14%,
+    // 100,000→16%, and 200,000→18%.
+    const rate = units < 30000n * scale ? 10 : units < 100000n * scale ? 14 : units < 200000n * scale ? 16 : 18;
     const divisor = 100n * scale;
     const bonus = (units * BigInt(rate) + divisor / 2n) / divisor;
     // Both coefficients are exact finite decimals. Never use floating point
