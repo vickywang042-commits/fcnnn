@@ -3,7 +3,8 @@
   const OCR_SCRIPT = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
   const NAME_MAP = Object.freeze({
     SKHY: "SK海力士", MU: "美光", MRVL: "邁威爾", COHR: "科赫特",
-    TSM: "台積電ADR", AAPL: "蘋果", NVDA: "輝達", TSLA: "特斯拉",
+    TSM: "台積電", AAPL: "蘋果", NVDA: "輝達", TSLA: "特斯拉",
+    DELL: "戴爾", AAL: "美國航空",
     AMD: "超微", AVGO: "博通", AMZN: "亞馬遜", META: "Meta",
     MSFT: "微軟", GOOGL: "Alphabet", GOOG: "Alphabet", NFLX: "Netflix",
     ARM: "安謀", QCOM: "高通", INTC: "英特爾", SMCI: "美超微",
@@ -43,7 +44,23 @@
     const start = text.indexOf(marker);
     if (start < 0) return "";
     const body = text.slice(start + marker.length);
-    const next = body.search(/\[\[FCN_TABLE_ROW_\d+\]\]/);
+    const next = body.search(/\[\[FCN_[A-Z0-9_]+\]\]/);
+    return (next >= 0 ? body.slice(0, next) : body).trim();
+  }
+  function markedPricingCell(text) {
+    const marker = "[[FCN_PRICING_CELL]]";
+    const start = text.indexOf(marker);
+    if (start < 0) return "";
+    const body = text.slice(start + marker.length);
+    const next = body.search(/\[\[FCN_[A-Z0-9_]+\]\]/);
+    return (next >= 0 ? body.slice(0, next) : body).trim();
+  }
+  function markedTickerCells(text) {
+    const marker = "[[FCN_TICKER_CELLS]]";
+    const start = text.indexOf(marker);
+    if (start < 0) return "";
+    const body = text.slice(start + marker.length);
+    const next = body.search(/\[\[FCN_[A-Z0-9_]+\]\]/);
     return (next >= 0 ? body.slice(0, next) : body).trim();
   }
   function percentFromRow(row, index, fallbackNumberIndex = index) {
@@ -52,27 +69,40 @@
     const numbers = allNumbers(row);
     return numbers[fallbackNumberIndex] ?? null;
   }
-  function tickerRows(text) {
+  function tickerRows(text, allowStandalone = false) {
     const rows = [], seen = new Set(), marketSuffixes = [];
-    const aliases = { AAPI: "AAPL", APPL: "AAPL", NVOA: "NVDA", NV0A: "NVDA", T5LA: "TSLA", TSIA: "TSLA", T5M: "TSM" };
-    const paired = /\b([A-Z][A-Z0-9.-]{1,8}?)[ .-]?(UN|UW|US|UQ|JT|JP|AT|HK)\b/gi;
-    for (const match of text.matchAll(paired)) {
-      const rawSymbol = match[1].toUpperCase().replace(/[^A-Z0-9.]/g, "");
-      const symbol = aliases[rawSymbol] || rawSymbol;
-      if (!symbol || seen.has(symbol)) continue;
-      seen.add(symbol); marketSuffixes.push(match[2].toUpperCase());
+    const aliases = { AAI: "AAL", AAPI: "AAPL", APPL: "AAPL", NVOA: "NVDA", NV0A: "NVDA", NTC: "INTC", T5LA: "TSLA", TSIA: "TSLA", T5M: "TSM" };
+    const add = (rawSymbol, suffix = "") => {
+      const cleaned = String(rawSymbol || "").toUpperCase().replace(/[^A-Z0-9.]/g, "");
+      const symbol = aliases[cleaned] || cleaned;
+      if (!symbol || seen.has(symbol)) return;
+      seen.add(symbol); if (suffix) marketSuffixes.push(suffix.toUpperCase());
       rows.push({ symbol, name: NAME_MAP[symbol] || "" });
+    };
+    const paired = /\b([A-Z][A-Z0-9.-]{1,8}?)[\s.-]?(UN|UW|US|UQ|JT|JP|AT|HK)\b/gi;
+    for (const match of text.matchAll(paired)) {
+      add(match[1], match[2]);
+    }
+    if (allowStandalone) {
+      const ignored = new Set(["UN", "UW", "US", "UQ", "JT", "JP", "AT", "HK", "FCN", "USD", "JPY", "AUD", "TWD"]);
+      for (const line of String(text || "").split("\n")) {
+        const candidate = (line.toUpperCase().match(/\b[A-Z][A-Z0-9.]{1,8}\b/g) || []).find((token) => !ignored.has(token));
+        if (candidate) add(candidate);
+      }
     }
     for (const [symbol, name] of Object.entries(NAME_MAP)) {
       if (seen.has(symbol) || !new RegExp(`\\b${symbol}\\b`, "i").test(text)) continue;
       seen.add(symbol); rows.push({ symbol, name });
     }
-    return { rows: rows.slice(0, 8), marketSuffixes };
+    // The source inquiry table has at most four linked-underlying columns.
+    // Limiting to those four also prevents a second, noisier OCR pass from
+    // appending a hallucinated duplicate after the real row has been read.
+    return { rows: rows.slice(0, 4), marketSuffixes };
   }
   function parseProductOcrText(rawText) {
     const text = normalizeText(rawText), lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
     const flat = text.replace(/\n/g, " ");
-    const taggedRow1 = markedTableRow(text, 1), taggedRow2 = markedTableRow(text, 2), taggedRow3 = markedTableRow(text, 3);
+    const taggedRow1 = markedTableRow(text, 1), taggedRow2 = markedTableRow(text, 2), taggedRow3 = markedTableRow(text, 3), taggedPricing = markedPricingCell(text), taggedTickers = markedTickerCells(text);
     const row1 = taggedRow1 || lines.find((line) => /\b(?:USD|JPY|AUD|TWD|HKD|EUR|GBP|CHF|CNH|CNY)\b/i.test(line) && tickerRows(line).rows.length >= 1) || "";
     const row2 = taggedRow2 || lines.find((line) => /\b(?:DAILY|MEMORY|PERIOD|EKI|AKI|NONE)\b/i.test(line) && /\d/.test(line)) || "";
     const row3 = taggedRow3 || lines.find((line) => /20\d{2}\s*SN\s*\d+/i.test(line)) || "";
@@ -101,9 +131,9 @@
       || flat.match(/保證領息(?:期間)?\s*(?:\(月\))?\s*[:：]?\s*(\d{1,2})(?:\s*(?:個?月|\(月\)))?/i)
       || flat.match(/\b(?:USD|JPY|AUD|TWD|HKD|EUR|GBP|CHF|CNH|CNY)\s+(\d{1,2})\b/i);
     const guaranteed = guaranteedMatch ? cleanNumber(guaranteedMatch[1]) : "—";
-    const pricingSource = `${row3} ${flat}`;
-    const pricing = /開盤價/.test(pricingSource) ? "開盤價" : /收盤價/.test(pricingSource) ? "收盤價" : "待確認";
-    const tickers = tickerRows(`${row1}\n${flat}`);
+    const pricingSource = `${taggedPricing} ${row3} ${flat}`.replace(/\s+/g, "");
+    const pricing = /開盤/.test(pricingSource) ? "開盤價" : /收盤/.test(pricingSource) ? "收盤價" : "待確認";
+    const tickers = taggedTickers ? tickerRows(taggedTickers, true) : tickerRows(`${row1}\n${flat}`);
     const markets = new Set(tickers.marketSuffixes.map((suffix) => ["JT", "JP"].includes(suffix) ? "日股" : suffix === "AT" ? "澳股" : "美股"));
     const market = markets.size === 1 ? [...markets][0] : markets.size > 1 ? "跨市場" : "美股";
     const currencyNames = { USD: "美金", JPY: "日圓", AUD: "澳幣", TWD: "台幣", HKD: "港幣", EUR: "歐元", GBP: "英鎊", CHF: "瑞郎", CNH: "人民幣", CNY: "人民幣" };
@@ -155,7 +185,13 @@
     context.drawImage(source, 0, 0, canvas.width, canvas.height); source.close?.();
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height), data = pixels.data;
     for (let index = 0; index < data.length; index += 4) {
-      const gray = data[index] * .299 + data[index + 1] * .587 + data[index + 2] * .114;
+      // Red tickers are used to highlight some underlyings in the source
+      // table. Normal luminance can wash those characters out, so also look
+      // at the green/blue channels and keep whichever representation is darker.
+      const gray = Math.min(
+        data[index] * .299 + data[index + 1] * .587 + data[index + 2] * .114,
+        (data[index + 1] + data[index + 2]) / 2 + 18
+      );
       const value = Math.max(0, Math.min(255, (gray - 128) * 1.22 + 128));
       data[index] = data[index + 1] = data[index + 2] = value;
     }
@@ -224,11 +260,54 @@
       return binarizeCanvas(rowCanvas);
     });
   }
+  function extractTickerCells(tableRows) {
+    const row = tableRows[0];
+    if (!row) return null;
+    // The four linked-underlying columns occupy the middle of the first data
+    // row. Read them separately and stack them vertically so red/small ticker
+    // text cannot be lost among the surrounding percentages and labels.
+    const columnBounds = [[.31, .405], [.405, .495], [.495, .59], [.59, .69]];
+    const gap = Math.max(18, Math.round(row.height * .22));
+    const targetCellWidth = 520;
+    const prepared = columnBounds.map(([start, end]) => {
+      const sourceX = Math.floor(row.width * start);
+      const sourceWidth = Math.max(1, Math.floor(row.width * (end - start)));
+      const scale = Math.min(3.2, targetCellWidth / sourceWidth);
+      return { sourceX, sourceWidth, width: Math.max(1, Math.round(sourceWidth * scale)), height: Math.max(1, Math.round(row.height * scale)) };
+    });
+    const composite = document.createElement("canvas");
+    composite.width = Math.max(...prepared.map((cell) => cell.width)) + gap * 2;
+    composite.height = prepared.reduce((height, cell) => height + cell.height, gap * (prepared.length + 1));
+    const context = composite.getContext("2d", { willReadFrequently: true });
+    context.fillStyle = "#fff"; context.fillRect(0, 0, composite.width, composite.height);
+    let y = gap;
+    prepared.forEach((cell) => {
+      context.drawImage(row, cell.sourceX, 0, cell.sourceWidth, row.height, gap, y, cell.width, cell.height);
+      y += cell.height + gap;
+    });
+    return binarizeCanvas(composite);
+  }
+  function extractPricingCell(tableRows) {
+    const row = tableRows[2];
+    if (!row) return null;
+    // In the third data row, the second column is the initial-pricing basis.
+    // Isolating this small cell gives Chinese OCR a much cleaner word than the
+    // entire wide row, where the product code and other columns dominate.
+    const sourceX = Math.floor(row.width * .19), sourceWidth = Math.floor(row.width * .21);
+    const scale = Math.min(3, 1200 / Math.max(1, sourceWidth));
+    const cell = document.createElement("canvas");
+    cell.width = Math.max(1, Math.round(sourceWidth * scale)); cell.height = Math.max(1, Math.round(row.height * scale));
+    const context = cell.getContext("2d", { willReadFrequently: true });
+    context.fillStyle = "#fff"; context.fillRect(0, 0, cell.width, cell.height);
+    context.drawImage(row, sourceX, 0, sourceWidth, row.height, 0, 0, cell.width, cell.height);
+    return binarizeCanvas(cell);
+  }
   async function recognizeProductImage(file, onProgress = () => {}, signal) {
     if (!file || !/^image\//.test(file.type || "")) throw new Error("請選擇圖片檔");
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     onProgress({ label: "整理圖片", percent: 0.03 });
-    const image = await prepareImage(file), tableRows = extractTableRows(image), passCount = 1 + tableRows.length;
+    const image = await prepareImage(file), tableRows = extractTableRows(image), tickerCells = extractTickerCells(tableRows), pricingCell = extractPricingCell(tableRows);
+    const passCount = 1 + tableRows.length + (tickerCells ? 1 : 0) + (pricingCell ? 1 : 0);
     const Tesseract = await loadOcrLibrary();
     let worker;
     let passIndex = 0;
@@ -251,7 +330,27 @@
         const rowResult = await worker.recognize(tableRows[index]);
         combinedText += `\n[[FCN_TABLE_ROW_${index + 1}]]\n${rowResult?.data?.text || ""}`;
       }
-      const parsed = parseProductOcrText(combinedText);
+      if (tickerCells) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        passIndex = 1 + tableRows.length;
+        await worker.setParameters({
+          tessedit_pageseg_mode: "6",
+          preserve_interword_spaces: "1",
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789. ",
+        });
+        const tickerResult = await worker.recognize(tickerCells);
+        combinedText += `\n[[FCN_TICKER_CELLS]]\n${tickerResult?.data?.text || ""}`;
+      }
+      let parsed = parseProductOcrText(combinedText);
+      if (parsed.pricing === "待確認" && pricingCell) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        passIndex = 1 + tableRows.length + (tickerCells ? 1 : 0);
+        await worker.setParameters({ tessedit_pageseg_mode: "7", preserve_interword_spaces: "1", tessedit_char_whitelist: "" });
+        const pricingResult = await worker.recognize(pricingCell);
+        combinedText += `\n[[FCN_PRICING_CELL]]\n${pricingResult?.data?.text || ""}`;
+        parsed = parseProductOcrText(combinedText);
+      }
+      onProgress({ label: "完成辨識", percent: 1 });
       return { parsed, formatted: formatProductOcrResult(parsed) };
     } finally { signal?.removeEventListener("abort", abort); if (worker) await worker.terminate().catch(() => {}); }
   }

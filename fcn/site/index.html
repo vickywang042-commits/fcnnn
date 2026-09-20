@@ -812,7 +812,19 @@ function productImageSnapshot(p, status, prices) {
       const comparable = lp ? comparableCloseFor(p, u, lp.date, prices) : null;
       const ratio = comparable !== null && Number(u.entryPrice) > 0 ? `${(comparable / Number(u.entryPrice) * 100).toFixed(1)}%` : "—";
       const hit = status.koProgress?.hits?.[index];
-      const lines = [`期初股價 ${fmtPrice(u.entryPrice)}`, lp ? `最新收盤 ${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "尚無正式收盤價"];
+      const levels = levelsFor(p, u);
+      const splitFactor = splitFactorFor(p, u, lp?.date || "9999-12-31", prices);
+      const adjustedLevel = (value) => Number(value) / (splitFactor || 1);
+      const koPct = Number(hit?.thresholdPct ?? p.autocallPct) || 0;
+      const koLevel = Number(u.entryPrice || 0) * koPct / 100;
+      const splitNote = splitFactor !== 1 ? "（拆股換算後）" : "";
+      const lines = [
+        `期初股價：${fmtPrice(u.entryPrice)}`,
+        lp ? `目前收盤價：${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "目前收盤價：尚無正式收盤價",
+        `KO價：${fmtPrice(adjustedLevel(koLevel))}${splitNote}`,
+        `執行價：${fmtPrice(adjustedLevel(levels.strike))}${splitNote}`,
+        `KI價：${kiTypeOf(p) === "NONE" ? "無" : `${fmtPrice(adjustedLevel(levels.ki))}${splitNote}`}`,
+      ];
       if (hit) lines.push(`KO ${hit.hit ? `✓ 已達 KO　${fmtDate(hit.date)}` : "○ 尚未達 KO"}${hit.thresholdPct != null ? `　門檻 ${hit.thresholdPct}%` : ""}`);
       if (kiTypeOf(p) === "AKI") { const aki = akiHitForUnderlying(p, u, prices); lines.push(`AKI ${aki.hit ? `已觸發　${fmtDate(aki.date)}` : "尚未觸發"}`); }
       const splits = relevantSplitsFor(p, u, prices, lp?.date || "9999-12-31");
@@ -963,6 +975,10 @@ async function readBackupFile(file) {
   });
 }
 
+function productDomId(id) {
+  return `product-${String(id || "").replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
 function App() {
   const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
   const [prices, setPrices] = useState(() => loadJSON(PRICES_KEY, {}));
@@ -1010,6 +1026,16 @@ function App() {
   const goToPage = (page) => {
     setActivePage(page);
     window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  const openProductFromCustomer = (productId) => {
+    setActivePage("products");
+    setActiveFilter("all");
+    setOneLeftOnly(false);
+    setSearchText("");
+    setExpanded((previous) => ({ ...previous, [productId]: true }));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById(productDomId(productId))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
   };
   const copyTextResult = async (text, title) => {
     if (!text) return;
@@ -1462,7 +1488,7 @@ function App() {
             </div>
           )}
           {sortedStatuses.map(({ p, status }) => (
-            <div key={p.id} className="product-card border rounded-2xl overflow-hidden">
+            <div id={productDomId(p.id)} key={p.id} className="product-card border rounded-2xl overflow-hidden scroll-mt-4">
               <div className="flex flex-col gap-2.5 px-3.5 py-3 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
                 onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
                 <div className="w-full min-w-0 sm:w-auto">
@@ -1642,6 +1668,7 @@ function App() {
             searchText={customerSearch}
             onSearch={setCustomerSearch}
             onEdit={(customer) => { setEditingCustomer(customer); setCustomerFormOpen(true); }}
+            onOpenProduct={openProductFromCustomer}
           />
         ) : (
           <ConfirmedArchivePage
@@ -1956,7 +1983,7 @@ function ConfirmedArchivePage({ items, searchText, onSearch, prices, imageBusyId
   );
 }
 
-function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit }) {
+function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit, onOpenProduct }) {
   const permissionLabel = (key) => CUSTOMER_PERMISSIONS.find(([value]) => value === key)?.[1] || key;
   return (
     <div>
@@ -2006,10 +2033,11 @@ function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit }) {
               {customer.activeProducts.length > 0 ? (
                 <div className="space-y-1.5">
                   {customer.activeProducts.map((product) => (
-                    <div key={product.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-[#2f3a3e] px-3 py-2 text-sm">
-                      <span className="font-num text-slate-100">{product.code}</span>
-                      <span className="text-slate-400">{product.structure}{product.maturity ? `・${fmtDate(product.maturity)}` : ""}</span>
-                    </div>
+                    <button type="button" key={product.id} onClick={() => onOpenProduct(product.id)}
+                      className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-[#2f3a3e] px-3 py-2 text-left text-sm transition hover:bg-[#3a484c] focus:outline-none focus:ring-2 focus:ring-[#9eb09d]">
+                      <span className="font-num font-medium text-[#d8e5dc] underline decoration-[#7f9788] underline-offset-4">{product.code}</span>
+                      <span className="text-slate-400">{product.structure}{product.maturity ? `・${fmtDate(product.maturity)}` : ""}　→</span>
+                    </button>
                   ))}
                 </div>
               ) : <div className="text-sm text-slate-400">目前沒有存續中商品</div>}
