@@ -92,7 +92,7 @@
 <body>
 <div id="root"></div>
 <script src="/tracker-tools.js"></script>
-<script src="/product-ocr.js"></script>
+<script src="/product-ocr.js?v=31"></script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -1409,7 +1409,7 @@ function App() {
             <IPlus /> 新增產品
           </button>
           <button onClick={() => setBonusModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▤ 獎金計算</button>
-          <button onClick={() => setOcrModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▧ 辨識商品</button>
+          <button onClick={() => setOcrModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▧ 辨識</button>
           <button onClick={() => setBackupModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">
             <IArchive /> 備份與還原
           </button>
@@ -1825,15 +1825,15 @@ function ProductOcrModal({ onClose, onCopy }) {
     }
   };
   const choose = (event) => { const file = event.target.files?.[0]; event.target.value = ""; recognize(file); };
-  return <SmallModal title="辨識商品" onClose={onClose}>
-    <div className="mb-3 text-sm leading-relaxed text-slate-300">請讓條件表格保持清楚、端正，並盡量裁掉背景。辨識完成後請核對內容。</div>
+  return <SmallModal title="辨識" onClose={onClose}>
+    <div className="mb-3 text-sm leading-relaxed text-slate-300">請選擇清楚、完整的圖片。辨識完成後請核對內容。</div>
     <div className="grid grid-cols-2 gap-2">
       <button type="button" onClick={() => galleryRef.current?.click()} className="pencil-button rounded-lg bg-[#65787c] px-3 py-2.5 text-slate-100">選擇圖片</button>
       <button type="button" onClick={() => cameraRef.current?.click()} className="pencil-button rounded-lg bg-[#9eb09d] px-3 py-2.5 text-slate-950">開啟相機</button>
     </div>
     <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={choose} />
     <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choose} />
-    {previewUrl && <img src={previewUrl} alt="待辨識商品圖片" className="mt-3 max-h-36 w-full rounded-lg bg-slate-950 object-contain" />}
+    {previewUrl && <img src={previewUrl} alt="待辨識圖片" className="mt-3 max-h-36 w-full rounded-lg bg-slate-950 object-contain" />}
     {progress && <div className="mt-3 rounded-lg bg-slate-950 p-3">
       <div className="mb-2 flex justify-between text-sm text-slate-300"><span>{progress.label}</span><span>{Math.round((progress.percent || 0) * 100)}%</span></div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-[#9eb09d] transition-all" style={{ width: `${Math.max(3, Math.round((progress.percent || 0) * 100))}%` }} /></div>
