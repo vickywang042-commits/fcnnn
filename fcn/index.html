@@ -397,7 +397,6 @@ function trustedCloseForDate(value, date, symbol = "") {
   // a pre-market daily candle as official. A refresh with the new function
   // replaces them with a versioned completed-close record.
   if (isObject && value.officialClose === true) {
-    if (date < "2026-09-08") return close;
     return value.closeVerification === "completed-daily-v3" ? close : null;
   }
   if (age >= 0 && age <= 2) return null;
@@ -727,7 +726,9 @@ const pmOutcomeLabels = {
   unknown: "未辨識結果",
 };
 function parsePmReport(text) {
-  const source = String(text || "");
+  const source = String(text || "").normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u3000\t]+/g, " ");
   const matches = Array.from(source.matchAll(/(?:MA)?\d{4}SN\d{2,6}/gi));
   const entries = matches.map((match, index) => {
     const segment = source.slice(match.index + match[0].length, matches[index + 1]?.index ?? source.length);
@@ -762,6 +763,45 @@ function comparePmReportWithClientProducts(reportEntries, statuses) {
     ignoredCount: reportEntries.length - overlaps.length,
   };
 }
+const completedStatusKeys = new Set(["called", "matured_par", "matured_shares"]);
+function parseMemoReport(text) {
+  const source = String(text || "").normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u3000\t]+/g, " ");
+  const entries = [];
+  const pattern = /(^|[\s\n])(@?)\s*((?:MA)?\d{4}SN\d{2,6})/gim;
+  let match;
+  while ((match = pattern.exec(source))) {
+    entries.push({ code: normalizeProductCode(match[3]), markedOpen: match[2] === "@" });
+  }
+  return Array.from(new Map(entries.map((entry) => [entry.code, entry])).values());
+}
+function compareMemoReportWithProducts(memoEntries, statuses) {
+  const trackedByCode = new Map(statuses.map((item) => [normalizeProductCode(item.p.code), item]));
+  const memoByCode = new Map(memoEntries.map((entry) => [entry.code, entry]));
+  const removeAt = [];
+  const closedMemoButOpen = [];
+  const openMissingFromTracker = [];
+
+  memoEntries.forEach((entry) => {
+    const tracked = trackedByCode.get(entry.code);
+    if (!tracked) {
+      if (entry.markedOpen) openMissingFromTracker.push(entry);
+      return;
+    }
+    const systemClosed = Boolean(tracked.p.completionConfirmed) || completedStatusKeys.has(tracked.status.key);
+    if (entry.markedOpen && systemClosed) removeAt.push({ ...entry, ...tracked });
+    if (!entry.markedOpen && !systemClosed) closedMemoButOpen.push({ ...entry, ...tracked });
+  });
+
+  const activeMissingFromMemo = statuses.filter((item) => {
+    const code = normalizeProductCode(item.p.code);
+    const systemClosed = Boolean(item.p.completionConfirmed) || completedStatusKeys.has(item.status.key);
+    return code && !systemClosed && !memoByCode.has(code);
+  }).sort((a, b) => compareProductCode(a.p.code, b.p.code));
+
+  return { memoEntries, removeAt, closedMemoButOpen, openMissingFromTracker, activeMissingFromMemo };
+}
 function formatWanAmount(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) return "金額未填";
@@ -795,14 +835,10 @@ function productImageSnapshot(p, status, prices) {
   const totals = Object.entries(totalsByCurrency(p)).map(([currency, amount]) => `${FcnTools.amountInWan(amount)} ${currency}`).join(" / ");
   if (totals) sections[0].lines.push(`分幣別合計：${totals}`);
   if (status.key !== "pending_docs") {
-    const mode = isStepdown(p) ? (stepdownModeOf(p) === "period_end_memory" ? "Period End Memory" : "Period End") : (fcnModeOf(p) === "daily_memory" ? "Daily Memory" : "Daily");
-    sections.push({ title: "商品條款", lines: [
-      `架構 ${structureLabel(p)}　出場模式 ${mode}　商品幣別 ${p.currency || "USD"}`,
+    sections.push({ title: "重要日期", lines: [
       `交易日 ${fmtDate(p.tradeDate)}　商品天期 ${p.tenorMonths || "—"} 個月`,
       `開始比價日 ${p.startObsDate ? fmtDate(p.startObsDate) : isStepdown(p) ? "見觀察日" : "—"}`,
       `期末評價日 ${fmtDate(maturityOf(p))}`,
-      `年化配息 ${p.couponRate || "—"}%　保證領息 ${guaranteedCouponMonthsOf(p)} 個月`,
-      `初始 KO ${p.autocallPct}%　執行價 ${p.strikePct}%　${kiTypeOf(p) === "NONE" ? "None" : `${kiTypeOf(p)} ${p.kiPct}%`}`,
     ] });
     if (isStepdown(p)) sections.push({ title: `每月觀察日｜每月下降 ${p.stepDownPct || 0}%`, lines: observationSchedule(p).map((obs) => {
       const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
@@ -810,13 +846,24 @@ function productImageSnapshot(p, status, prices) {
     }) });
     if (structureOf(p) === "EXPRESS_FCN") sections.push({ title: "首月觀察", lines: [`第一個月觀察日結束 ${fmtDate(p.firstMonthObsEnd)}`] });
     (p.underlyings || []).forEach((u, index) => {
-      const lp = latestPriceFor(u.symbol, prices), lv = levelsFor(p, u);
+      const lp = latestPriceFor(u.symbol, prices);
       const comparable = lp ? comparableCloseFor(p, u, lp.date, prices) : null;
       const ratio = comparable !== null && Number(u.entryPrice) > 0 ? `${(comparable / Number(u.entryPrice) * 100).toFixed(1)}%` : "—";
       const hit = status.koProgress?.hits?.[index];
-      const lines = [`期初股價 ${fmtPrice(u.entryPrice)}`, lp ? `最新收盤 ${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "尚無正式收盤價",
-        `初始 KO價 ${fmtPrice(lv.ko)}　執行價 ${fmtPrice(lv.strike)}${kiTypeOf(p) !== "NONE" ? `　${kiTypeOf(p)}價 ${fmtPrice(lv.ki)}` : ""}`];
-      if (hit) lines.push(`KO ${hit.hit ? `✓ 已達標　${fmtDate(hit.date)}` : "尚未達標"}${hit.thresholdPct != null ? `　門檻 ${hit.thresholdPct}%` : ""}`);
+      const levels = levelsFor(p, u);
+      const splitFactor = splitFactorFor(p, u, lp?.date || "9999-12-31", prices);
+      const adjustedLevel = (value) => Number(value) / (splitFactor || 1);
+      const koPct = Number(hit?.thresholdPct ?? p.autocallPct) || 0;
+      const koLevel = Number(u.entryPrice || 0) * koPct / 100;
+      const splitNote = splitFactor !== 1 ? "（拆股換算後）" : "";
+      const lines = [
+        `期初股價：${fmtPrice(u.entryPrice)}`,
+        lp ? `目前收盤價：${fmtPrice(lp.price)}（${ratio}）　${fmtDate(lp.date)}` : "目前收盤價：尚無正式收盤價",
+        `KO價：${fmtPrice(adjustedLevel(koLevel))}${splitNote}`,
+        `執行價：${fmtPrice(adjustedLevel(levels.strike))}${splitNote}`,
+        `KI價：${kiTypeOf(p) === "NONE" ? "無" : `${fmtPrice(adjustedLevel(levels.ki))}${splitNote}`}`,
+      ];
+      if (hit) lines.push(`KO ${hit.hit ? `✓ 已達 KO　${fmtDate(hit.date)}` : "○ 尚未達 KO"}${hit.thresholdPct != null ? `　門檻 ${hit.thresholdPct}%` : ""}`);
       if (kiTypeOf(p) === "AKI") { const aki = akiHitForUnderlying(p, u, prices); lines.push(`AKI ${aki.hit ? `已觸發　${fmtDate(aki.date)}` : "尚未觸發"}`); }
       const splits = relevantSplitsFor(p, u, prices, lp?.date || "9999-12-31");
       if (splits.length) lines.push(`拆股換算：${splits.map((event) => `${fmtDate(event.date)} ${event.ratio || `${event.numerator}:${event.denominator}`}`).join("、")}`);
@@ -824,8 +871,7 @@ function productImageSnapshot(p, status, prices) {
     });
   }
   if (p.notes) sections.push({ title: "備註", lines: [p.notes] });
-  return { title: `${p.code || "未命名商品"}（${structureLabel(p)}）`, status: `${status.label}${p.completionConfirmed ? " · 已確認結案" : ""}${status.date ? ` · ${fmtDate(status.date)}` : ""}`, sections,
-    footer: `產生日期 ${fmtDate(todayISO())}｜收盤依標的市場；期末 KO → KI → 執行價` };
+  return { title: p.code || "未命名商品", status: `${status.label}${p.completionConfirmed ? " · 已確認結案" : ""}${status.date ? ` · ${fmtDate(status.date)}` : ""}`, sections };
 }
 function fallbackCopyText(text) {
   const textarea = document.createElement("textarea");
@@ -967,6 +1013,10 @@ async function readBackupFile(file) {
   });
 }
 
+function productDomId(id) {
+  return `product-${String(id || "").replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
 function App() {
   const [products, setProducts] = useState(() => loadJSON(PRODUCTS_KEY, []));
   const [prices, setPrices] = useState(() => loadJSON(PRICES_KEY, {}));
@@ -995,6 +1045,8 @@ function App() {
   const [pmReportText, setPmReportText] = useState("");
   const [expiryMonth, setExpiryMonth] = useState(() => todayISO().slice(0, 7));
   const [customerSearch, setCustomerSearch] = useState("");
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const fileInputRef = React.useRef(null);
 
   const persistProducts = useCallback((next) => { setProducts(next); saveJSON(PRODUCTS_KEY, next); }, []);
@@ -1002,6 +1054,26 @@ function App() {
   const persistCustomers = useCallback((next) => { setCustomers(next); saveJSON(CUSTOMERS_KEY, next); }, []);
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
   useEffect(() => () => { if (imageExport?.url) URL.revokeObjectURL(imageExport.url); }, [imageExport]);
+  useEffect(() => {
+    const updateBackToTop = () => setShowBackToTop(window.scrollY > 600);
+    updateBackToTop();
+    window.addEventListener("scroll", updateBackToTop, { passive: true });
+    return () => window.removeEventListener("scroll", updateBackToTop);
+  }, []);
+  const goToPage = (page) => {
+    setActivePage(page);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  const openProductFromCustomer = (productId) => {
+    setActivePage("products");
+    setActiveFilter("all");
+    setOneLeftOnly(false);
+    setSearchText("");
+    setExpanded((previous) => ({ ...previous, [productId]: true }));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.getElementById(productDomId(productId))?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+  };
   const copyTextResult = async (text, title) => {
     if (!text) return;
     try {
@@ -1081,7 +1153,7 @@ function App() {
         }
       : p);
     persistProducts(next);
-    showToast(confirmed ? "已確認結案；分類清單將不再顯示此商品" : "已取消確認；商品已恢復至分類清單");
+    showToast(confirmed ? "已移至已確認結案" : "已取消確認；商品已回到 FCN 記錄");
   };
 
   const allSymbols = useMemo(() => {
@@ -1199,13 +1271,32 @@ function App() {
     const today = todayISO();
     return products.map((p) => ({ p, status: computeStatus(p, prices, today) }));
   }, [products, prices]);
+  const activeStatuses = useMemo(() => statuses.filter(({ p }) => !p.completionConfirmed), [statuses]);
+  const archivedStatuses = useMemo(() => statuses.filter(({ p }) => p.completionConfirmed).sort((a, b) => {
+    const confirmedOrder = String(b.p.completionConfirmedAt || "").localeCompare(String(a.p.completionConfirmedAt || ""));
+    if (confirmedOrder !== 0) return confirmedOrder;
+    const maturityOrder = String(maturityOf(b.p) || "").localeCompare(String(maturityOf(a.p) || ""));
+    return maturityOrder || compareProductCode(a.p.code, b.p.code);
+  }), [statuses]);
 
+  const comparisonMode = useMemo(() => {
+    const text = pmReportText.trim();
+    if (!text) return null;
+    return /提前到期|提前出場|到期保本|保本出場|到期接股票|接股票/.test(text) ? "pm" : "memo";
+  }, [pmReportText]);
   const pmComparison = useMemo(() => {
+    if (comparisonMode !== "pm") return null;
     const reportEntries = parsePmReport(pmReportText);
     if (reportEntries.length === 0) return null;
-    return comparePmReportWithClientProducts(reportEntries, statuses);
-  }, [pmReportText, statuses]);
+    return comparePmReportWithClientProducts(reportEntries, activeStatuses);
+  }, [pmReportText, activeStatuses, comparisonMode]);
   const pmCopyText = useMemo(() => buildPmCopyText(pmComparison?.consistent || []), [pmComparison]);
+  const memoComparison = useMemo(() => {
+    if (comparisonMode !== "memo") return null;
+    const memoEntries = parseMemoReport(pmReportText);
+    if (memoEntries.length === 0) return { memoEntries };
+    return compareMemoReportWithProducts(memoEntries, statuses);
+  }, [pmReportText, statuses, comparisonMode]);
   const copyPmResult = async () => {
     if (!pmCopyText) return;
     try {
@@ -1220,32 +1311,33 @@ function App() {
   };
 
   const buckets = useMemo(() => {
-    const unconfirmed = (key) => statuses.filter((s) => s.status.key === key && !s.p.completionConfirmed);
-    const called = unconfirmed("called");
-    const maturedPar = unconfirmed("matured_par");
-    const maturedShares = unconfirmed("matured_shares");
-    const pendingDocs = statuses.filter((s) => s.status.key === "pending_docs");
-    const oneLeft = statuses.filter((s) => isOneUnderlyingFromCall(s.status));
-    const upcoming = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+    const byStatus = (key) => activeStatuses.filter((s) => s.status.key === key);
+    const called = byStatus("called");
+    const maturedPar = byStatus("matured_par");
+    const maturedShares = byStatus("matured_shares");
+    const pendingDocs = byStatus("pending_docs");
+    const oneLeft = activeStatuses.filter((s) => isOneUnderlyingFromCall(s.status));
+    const upcoming = activeStatuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
       .sort((a, b) => a.status.daysToNext - b.status.daysToNext);
-    const month = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+    const month = activeStatuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
       .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
     return { called, maturedPar, maturedShares, pendingDocs, oneLeft, upcoming, month };
-  }, [statuses, expiryMonth]);
+  }, [activeStatuses, expiryMonth]);
 
-  // exited products (already called / matured) sink to the bottom; live ones sort by soonest maturity
+  // Confirmed closures live on the separate archive page; the working list only
+  // contains records that may still need action.
   const filteredByPrimary = useMemo(() => {
-    let result = statuses;
-    if (activeFilter === "called") result = statuses.filter((s) => s.status.key === "called" && !s.p.completionConfirmed);
-    else if (activeFilter === "matured_par") result = statuses.filter((s) => s.status.key === "matured_par" && !s.p.completionConfirmed);
-    else if (activeFilter === "matured_shares") result = statuses.filter((s) => s.status.key === "matured_shares" && !s.p.completionConfirmed);
-    else if (activeFilter === "pending_docs") result = statuses.filter((s) => s.status.key === "pending_docs");
-    else if (activeFilter === "upcoming") result = statuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
+    let result = activeStatuses;
+    if (activeFilter === "called") result = activeStatuses.filter((s) => s.status.key === "called");
+    else if (activeFilter === "matured_par") result = activeStatuses.filter((s) => s.status.key === "matured_par");
+    else if (activeFilter === "matured_shares") result = activeStatuses.filter((s) => s.status.key === "matured_shares");
+    else if (activeFilter === "pending_docs") result = activeStatuses.filter((s) => s.status.key === "pending_docs");
+    else if (activeFilter === "upcoming") result = activeStatuses.filter((s) => s.status.key === "live" && Number.isFinite(s.status.daysToMaturity) && s.status.daysToMaturity >= 0 && s.status.daysToMaturity <= 7)
       .sort((a,b) => a.status.daysToMaturity - b.status.daysToMaturity);
-    else if (activeFilter === "month") result = statuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
+    else if (activeFilter === "month") result = activeStatuses.filter((s) => ["live", "matured_pending"].includes(s.status.key) && maturityOf(s.p).slice(0, 7) === expiryMonth)
       .sort((a, b) => maturityOf(a.p).localeCompare(maturityOf(b.p)));
     return result;
-  }, [statuses, activeFilter, expiryMonth]);
+  }, [activeStatuses, activeFilter, expiryMonth]);
   const contextualOneLeftCount = useMemo(
     () => filteredByPrimary.filter((item) => isOneUnderlyingFromCall(item.status)).length,
     [filteredByPrimary]
@@ -1259,10 +1351,8 @@ function App() {
     const searched = filteredStatuses.filter(({ p }) => FcnTools.productMatchesSearch(p, searchText));
     const rank = { pending_docs: 0, live: 1, called: 2, matured_par: 2, matured_shares: 2, matured_pending: 2 };
     return [...searched].sort((a, b) => {
-      // Confirmed records remain visible for audit purposes, but always sit
-      // beneath all products that still need daily attention.
-      const ra = a.p.completionConfirmed ? 3 : (rank[a.status.key] ?? 2);
-      const rb = b.p.completionConfirmed ? 3 : (rank[b.status.key] ?? 2);
+      const ra = rank[a.status.key] ?? 2;
+      const rb = rank[b.status.key] ?? 2;
       if (ra !== rb) return ra - rb;
       if (activeFilter === "upcoming" || activeFilter === "month") return maturityOf(a.p).localeCompare(maturityOf(b.p));
       return compareProductCode(a.p.code, b.p.code);
@@ -1314,7 +1404,9 @@ function App() {
           <div className="flex items-center gap-3 min-w-0">
             <img src="/icon-192.png" alt="" className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl shrink-0 shadow-lg shadow-cyan-950/40" />
             <div>
-              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">{activePage === "products" ? "FCN記錄" : "客戶資料"}</h1>
+              <h1 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight text-white">
+                {activePage === "products" ? "FCN記錄" : activePage === "customers" ? "客戶資料" : "已確認結案"}
+              </h1>
               <div className="text-sm text-slate-400 mt-1 font-num">{fmtDate(todayISO())}</div>
             </div>
           </div>
@@ -1324,11 +1416,15 @@ function App() {
               <IRefresh className={refreshing ? "animate-spin" : ""} />
               <span className="mobile-action-label">今日更新</span>
             </button>
-          ) : (
+          ) : activePage === "customers" ? (
             <button onClick={() => { setEditingCustomer(emptyCustomerRecord()); setCustomerFormOpen(true); }}
               className="pencil-button flex items-center gap-2 bg-[#9eb09d] text-slate-950 font-semibold px-3 py-2.5 rounded-xl shrink-0">
               <IPlus /> 新增客戶
             </button>
+          ) : (
+            <div className="shrink-0 rounded-xl border border-slate-600 bg-slate-800/70 px-3 py-2 text-sm text-slate-200">
+              <span className="font-num text-lg font-semibold">{archivedStatuses.length}</span> 檔
+            </div>
           )}
         </div>
 
@@ -1385,13 +1481,12 @@ function App() {
         <div className="pm-panel mb-6 rounded-2xl p-4 sm:p-5">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <div className="text-lg font-semibold text-slate-50">PM 每日清單比對</div>
-              <div className="text-sm text-slate-400 mt-1 leading-relaxed">只比對清單中與妳客戶商品重複的代號；其他公司商品會自動略過，不會列為未建檔。</div>
+              <div className="text-lg font-semibold text-slate-50">比對清單</div>
             </div>
             {pmReportText && <button onClick={() => setPmReportText("")} className="shrink-0 text-sm text-cyan-300 hover:text-cyan-200">清除</button>}
           </div>
           <textarea value={pmReportText} onChange={(e) => setPmReportText(e.target.value)} rows="5"
-            placeholder={"例如：\n2026SN4253 提前到期\n2026SN4265 提前到期\n2026SN2616 到期保本"}
+            placeholder={"貼上 PM 清單或備忘錄清單\n2026SN4253 提前到期\n@2026SN4068（FCN）終比價（11/20到期）"}
             className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950/80 px-3.5 py-3 text-base text-slate-100 font-num placeholder:text-slate-600" />
 
           {pmComparison && (
@@ -1431,6 +1526,36 @@ function App() {
               )}
             </div>
           )}
+
+          {memoComparison && (
+            <div className="mt-4 space-y-3">
+              {memoComparison.memoEntries.length === 0 ? (
+                <div className="rounded-xl border border-rose-700 bg-rose-950/40 px-4 py-3 text-sm text-rose-100">找不到商品代號。</div>
+              ) : (
+                <>
+                  {memoComparison.removeAt.length > 0 && (
+                    <PmResultGroup title="已結案，請移除 @" tone="danger"
+                      rows={memoComparison.removeAt.map((item) => `${item.code}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.closedMemoButOpen.length > 0 && (
+                    <PmResultGroup title="備忘錄已結案，系統仍未結案" tone="danger"
+                      rows={memoComparison.closedMemoButOpen.map((item) => `${item.code}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.openMissingFromTracker.length > 0 && (
+                    <PmResultGroup title="備忘錄有 @，記錄台找不到" tone="danger"
+                      rows={memoComparison.openMissingFromTracker.map((item) => item.code)} />
+                  )}
+                  {memoComparison.activeMissingFromMemo.length > 0 && (
+                    <PmResultGroup title="未結案，但備忘錄未記錄" tone="danger"
+                      rows={memoComparison.activeMissingFromMemo.map((item) => `${normalizeProductCode(item.p.code)}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.removeAt.length === 0 && memoComparison.closedMemoButOpen.length === 0 && memoComparison.openMissingFromTracker.length === 0 && memoComparison.activeMissingFromMemo.length === 0 && (
+                    <PmResultGroup title="比對一致" tone="success" rows={[`${memoComparison.memoEntries.length} 檔商品`]} />
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="space-y-2.5">
@@ -1440,7 +1565,7 @@ function App() {
             </div>
           )}
           {sortedStatuses.map(({ p, status }) => (
-            <div key={p.id} className="product-card border rounded-2xl overflow-hidden">
+            <div id={productDomId(p.id)} key={p.id} className="product-card border rounded-2xl overflow-hidden scroll-mt-4">
               <div className="flex flex-col gap-2.5 px-3.5 py-3 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
                 onClick={() => setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }))}>
                 <div className="w-full min-w-0 sm:w-auto">
@@ -1509,9 +1634,9 @@ function App() {
                       <div className="grid gap-2 sm:grid-cols-2">
                         {observationSchedule(p).map((obs) => {
                           const check = status.koProgress?.checks?.find((item) => item.index === obs.index);
-                          return <div key={obs.id} className="flex items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-sm">
+                          return <div key={obs.id} className={`flex items-center justify-between rounded-lg border px-3 py-2 text-sm ${check?.complete ? "border-emerald-500 bg-emerald-950/70" : check ? "border-amber-500 bg-amber-950/60" : "border-slate-700 bg-slate-900"}`}>
                             <span>第 {obs.monthNumber} 月・{obs.date ? fmtDate(obs.date) : "未填日期"}</span>
-                            <span className={check?.complete ? "text-emerald-300" : "text-amber-300"}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 全數達標" : "已比價") : ""}</span>
+                            <span className={`font-semibold ${check?.complete ? "text-emerald-200" : "text-amber-200"}`}>{obs.thresholdPct}% {check ? (check.complete ? "✓ 已達 KO" : "○ 未達 KO") : ""}</span>
                           </div>;
                         })}
                       </div>
@@ -1522,7 +1647,7 @@ function App() {
                     <div className="text-base text-slate-200 mb-2 flex flex-wrap items-center gap-2">
                       <span>標的現況</span>
                       {isAutoCallable(p) && status.koProgress && (
-                        <span className="text-sm text-amber-300 bg-amber-950/60 border border-amber-700 rounded-full px-2.5 py-1">
+                        <span className={`rounded-full border px-3 py-1 text-sm font-semibold ${status.koProgress.complete ? "border-emerald-400 bg-emerald-900/80 text-emerald-100" : "border-amber-400 bg-amber-900/80 text-amber-100"}`}>
                           {(isStepdown(p) ? stepdownModeOf(p) === "period_end_memory" : fcnModeOf(p) === "daily_memory") ? "曾於收盤達標" : isStepdown(p) ? "最近觀察日達標" : "今日收盤達標"}：{status.koProgress.hitCount}/{status.koProgress.total}
                         </span>
                       )}
@@ -1554,9 +1679,12 @@ function App() {
                               </div>
                             </div>
                             {koHit && (
-                              <div className={`mt-2 text-sm font-medium ${koHit.hit ? "text-emerald-300" : "text-amber-300"}`}>
-                                {koHit.hit ? <ICheck size={14} /> : <IClock size={14} />} {koHit.rule}
-                                {koHit.hit && `：${fmtDate(koHit.date)}，收盤價 ${Number(koHit.price).toFixed(2)}`}
+                              <div className={`mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border px-3 py-2 text-sm font-medium ${koHit.hit ? "border-emerald-400 bg-emerald-900/75 text-emerald-50" : "border-amber-400 bg-amber-900/70 text-amber-50"}`}>
+                                <span className="inline-flex items-center gap-1 font-bold">
+                                  {koHit.hit ? <ICheck size={16} /> : <IClock size={16} />} {koHit.hit ? "已達 KO" : "尚未達 KO"}
+                                </span>
+                                <span className={koHit.hit ? "text-emerald-100" : "text-amber-100"}>{koHit.rule}</span>
+                                {koHit.hit && <span className="font-num text-emerald-100">{fmtDate(koHit.date)}・收盤價 {fmtPrice(koHit.price)}</span>}
                               </div>
                             )}
                             {akiHit && (
@@ -1584,9 +1712,6 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="text-sm text-slate-400 mb-4 bg-slate-950 rounded-lg px-3 py-2 leading-relaxed">
-                    期末先 KO，再 KI，最後執行價。收盤時間依連結標的市場，與幣別無關。{kiTypeOf(p) === "EKI" ? " EKI 期末觀察。" : kiTypeOf(p) === "AKI" ? " AKI 從交易日至期末監測。" : ""}
-                  </div>
                   </>}
 
                   {p.notes && <div className="text-sm text-slate-400 mb-3">備註：{p.notes}</div>}
@@ -1613,13 +1738,26 @@ function App() {
             </div>
           ))}
         </div>
-        </> : (
+        </> : activePage === "customers" ? (
           <CustomerPage
             customers={visibleCustomers}
             totalCount={customers.length}
             searchText={customerSearch}
             onSearch={setCustomerSearch}
             onEdit={(customer) => { setEditingCustomer(customer); setCustomerFormOpen(true); }}
+            onOpenProduct={openProductFromCustomer}
+          />
+        ) : (
+          <ConfirmedArchivePage
+            items={archivedStatuses}
+            searchText={archiveSearch}
+            onSearch={setArchiveSearch}
+            prices={prices}
+            imageBusyId={imageBusyId}
+            onExportImage={exportProductImage}
+            onEdit={(p) => { setEditing(p); setShowForm(true); }}
+            onUnconfirm={(p) => setCompletionConfirmation(p.id, false)}
+            onDelete={(p) => deleteProduct(p.id)}
           />
         )}
       </div>
@@ -1666,12 +1804,20 @@ function App() {
       <input ref={fileInputRef} type="file" className="hidden"
         onChange={async (e) => { const file = e.target.files?.[0]; if (file) await importBackup(file); e.target.value = ""; }} />
 
+      {showBackToTop && (
+        <button type="button" aria-label="回到頁面頂端" title="回到頂端" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed right-4 z-30 flex h-11 w-11 min-h-0 items-center justify-center rounded-full border border-slate-500 bg-[#526267]/95 text-xl text-slate-50 shadow-lg backdrop-blur-sm"
+          style={{ bottom: "calc(5.25rem + env(safe-area-inset-bottom))" }}>↑</button>
+      )}
+
       <nav className="bottom-nav fixed inset-x-0 bottom-0 z-40">
-        <div className="mx-auto grid max-w-md grid-cols-2 gap-2 px-4 pt-2">
-          <button type="button" aria-current={activePage === "products" ? "page" : undefined} onClick={() => setActivePage("products")}
+        <div className="mx-auto grid max-w-lg grid-cols-3 gap-1.5 px-3 pt-2">
+          <button type="button" aria-current={activePage === "products" ? "page" : undefined} onClick={() => goToPage("products")}
             className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IHome size={21} />FCN</button>
-          <button type="button" aria-current={activePage === "customers" ? "page" : undefined} onClick={() => setActivePage("customers")}
+          <button type="button" aria-current={activePage === "customers" ? "page" : undefined} onClick={() => goToPage("customers")}
             className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IUsers size={21} />客戶</button>
+          <button type="button" aria-current={activePage === "archive" ? "page" : undefined} onClick={() => goToPage("archive")}
+            className="flex min-h-[3.25rem] items-center justify-center gap-2 rounded-xl text-slate-300"><IArchive size={20} />結案</button>
         </div>
       </nav>
 
@@ -1748,7 +1894,123 @@ function BackupModal({ onClose, onDownload, onShare, onImport }) {
   );
 }
 
-function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit }) {
+function ConfirmedArchivePage({ items, searchText, onSearch, prices, imageBusyId, onExportImage, onEdit, onUnconfirm, onDelete }) {
+  const [expanded, setExpanded] = useState({});
+  const query = String(searchText || "").trim().toLocaleLowerCase("zh-Hant");
+  const visibleItems = useMemo(() => items.filter(({ p, status }) => {
+    if (!query) return true;
+    const searchable = [
+      p.code, p.currency, structureLabel(p), status.label, p.notes,
+      ...(p.clients || []).flatMap((client) => [client.name, client.currency]),
+      ...(p.underlyings || []).flatMap((underlying) => [underlying.name, underlying.symbol]),
+    ].filter(Boolean).join(" ").toLocaleLowerCase("zh-Hant");
+    return searchable.includes(query);
+  }), [items, query]);
+
+  return (
+    <div>
+      <div className="utility-panel mb-4 rounded-2xl p-3.5 sm:p-4">
+        <div className="mb-2.5 flex items-center justify-between gap-3 text-sm text-slate-300">
+          <span>已確認結案共 {items.length} 檔</span>
+          <span className="text-slate-400">保留完整記錄</span>
+        </div>
+        <div className="relative">
+          <input value={searchText} onChange={(event) => onSearch(event.target.value)} placeholder="搜尋商品代號、客戶、幣別或標的"
+            className="w-full rounded-xl border border-slate-600 bg-slate-900 px-3.5 py-2.5 pr-11 text-slate-50" />
+          {searchText && <button type="button" aria-label="清除結案搜尋" onClick={() => onSearch("")}
+            className="absolute right-1.5 top-1/2 h-9 w-9 min-h-0 -translate-y-1/2 rounded-lg text-slate-300 hover:bg-white/10"><IX2 /></button>}
+        </div>
+      </div>
+
+      <div className="space-y-2.5">
+        {visibleItems.length === 0 && (
+          <div className="rounded-2xl border border-dashed border-slate-600 py-16 text-center text-slate-300">
+            {searchText ? "沒有符合搜尋條件的結案商品" : "尚無已確認結案的商品"}
+          </div>
+        )}
+        {visibleItems.map(({ p, status }) => {
+          const open = Boolean(expanded[p.id]);
+          return (
+            <article key={p.id} className="product-card overflow-hidden rounded-2xl border">
+              <button type="button" onClick={() => setExpanded((previous) => ({ ...previous, [p.id]: !open }))}
+                className="flex w-full min-h-0 flex-col items-stretch gap-2.5 rounded-none px-3.5 py-3 text-left sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="break-words font-num text-lg font-semibold text-slate-50 sm:text-xl">{p.code || "未命名產品"}</div>
+                  <div className="mt-0.5 break-words text-sm text-slate-400">
+                    {structureLabel(p)} ・ {(p.clients || []).map((client) => client.name).filter(Boolean).join("、") || "—"}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <span className={`rounded-full border px-2.5 py-1 text-sm font-medium ${toneClasses[status.tone]}`}>{status.label}</span>
+                  <span className="rounded-full border border-slate-600 bg-slate-800 px-2.5 py-1 text-xs text-slate-300">
+                    {p.completionConfirmedAt ? `${fmtDate(p.completionConfirmedAt)} 確認` : "已確認"}
+                  </span>
+                  <span className="ml-auto sm:ml-0">{open ? <IChevUp className="text-slate-500" /> : <IChevDown className="text-slate-500" />}</span>
+                </div>
+              </button>
+
+              {open && (
+                <div className="border-t border-slate-700 px-3.5 pb-4 pt-3.5">
+                  <div className="mb-4">
+                    <div className="mb-1.5 text-sm text-slate-400">客戶與投入金額</div>
+                    <div className="space-y-1">
+                      {(p.clients || []).map((client) => (
+                        <div key={client.id || `${client.name}-${client.amount}`} className="flex justify-between gap-3 rounded-lg bg-slate-950/60 px-3 py-2 text-sm">
+                          <span className="break-words text-slate-300">{client.name || "—"}</span>
+                          <span className="shrink-0 font-num text-slate-300">{client.amount ? Number(client.amount).toLocaleString() : "—"} {client.currency || p.currency || "USD"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mb-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
+                    <Field label="結案結果" value={status.label} />
+                    <Field label="期末評價日" value={fmtDate(maturityOf(p))} />
+                    <Field label="商品幣別" value={p.currency || "USD"} />
+                    <Field label="商品架構" value={structureLabel(p)} />
+                    <Field label="年化配息" value={p.couponRate ? `${p.couponRate}%` : "—"} />
+                    <Field label="保證領息" value={`${guaranteedCouponMonthsOf(p)} 個月`} />
+                    <Field label="出場價" value={`${p.autocallPct}%`} />
+                    <Field label="執行價" value={`${p.strikePct}%`} />
+                    <Field label="KI 類型" value={kiTypeOf(p) === "NONE" ? "None" : `${kiTypeOf(p)} ${p.kiPct}%`} />
+                  </div>
+
+                  {(p.underlyings || []).length > 0 && (
+                    <div className="mb-4">
+                      <div className="mb-2 text-sm text-slate-400">連結標的</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(p.underlyings || []).map((underlying) => {
+                          const latest = latestPriceFor(underlying.symbol, prices);
+                          return <div key={underlying.id || underlying.symbol} className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2.5 text-sm">
+                            <div className="font-num text-slate-100">{underlying.name || underlying.symbol || "—"} <span className="text-slate-400">{underlying.symbol}</span></div>
+                            <div className="mt-1 text-slate-400">進場 {fmtPrice(underlying.entryPrice)}・{latest ? `最新收盤 ${fmtPrice(latest.price)}（${fmtDate(latest.date)}）` : "尚無正式收盤價"}</div>
+                          </div>;
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {p.notes && <div className="mb-4 rounded-xl border border-slate-700 bg-[#344044] px-3 py-2.5 text-sm text-slate-300"><span className="text-slate-400">備註：</span>{p.notes}</div>}
+
+                  <div className="flex flex-wrap items-center gap-3 border-t border-slate-700 pt-3">
+                    <button type="button" disabled={imageBusyId === p.id} onClick={() => onExportImage(p, status)}
+                      className="text-sm text-cyan-200 hover:text-cyan-100 disabled:opacity-50">▧ {imageBusyId === p.id ? "產生中…" : "匯出圖片"}</button>
+                    <button type="button" onClick={() => onEdit(p)} className="flex items-center gap-1 text-sm text-slate-300 hover:text-slate-100"><IPencil size={14} />編輯</button>
+                    <button type="button" onClick={() => onUnconfirm(p)} className="text-sm text-amber-200 hover:text-amber-100">↩ 取消確認</button>
+                    <button type="button" onClick={() => { if (window.confirm(`確定刪除 ${p.code || "這筆商品"}？`)) onDelete(p); }}
+                      className="flex items-center gap-1 text-sm text-rose-300 hover:text-rose-200"><ITrash size={14} />刪除</button>
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit, onOpenProduct }) {
   const permissionLabel = (key) => CUSTOMER_PERMISSIONS.find(([value]) => value === key)?.[1] || key;
   return (
     <div>
@@ -1798,10 +2060,11 @@ function CustomerPage({ customers, totalCount, searchText, onSearch, onEdit }) {
               {customer.activeProducts.length > 0 ? (
                 <div className="space-y-1.5">
                   {customer.activeProducts.map((product) => (
-                    <div key={product.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-[#2f3a3e] px-3 py-2 text-sm">
-                      <span className="font-num text-slate-100">{product.code}</span>
-                      <span className="text-slate-400">{product.structure}{product.maturity ? `・${fmtDate(product.maturity)}` : ""}</span>
-                    </div>
+                    <button type="button" key={product.id} onClick={() => onOpenProduct(product.id)}
+                      className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg bg-[#2f3a3e] px-3 py-2 text-left text-sm transition hover:bg-[#3a484c] focus:outline-none focus:ring-2 focus:ring-[#9eb09d]">
+                      <span className="font-num font-medium text-[#d8e5dc] underline decoration-[#7f9788] underline-offset-4">{product.code}</span>
+                      <span className="text-slate-400">{product.structure}{product.maturity ? `・${fmtDate(product.maturity)}` : ""}　→</span>
+                    </button>
                   ))}
                 </div>
               ) : <div className="text-sm text-slate-400">目前沒有存續中商品</div>}

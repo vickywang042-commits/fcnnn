@@ -17,7 +17,9 @@
     const amount = decimalParts(input);
     if (!amount) return null;
     const { units, scale } = amount;
-    const rate = units <= 30000n * scale ? 10 : units <= 100000n * scale ? 14 : units <= 200000n * scale ? 16 : 18;
+    // Boundary amounts belong to the higher tier: 30,000→14%,
+    // 100,000→16%, and 200,000→18%.
+    const rate = units < 30000n * scale ? 10 : units < 100000n * scale ? 14 : units < 200000n * scale ? 16 : 18;
     const divisor = 100n * scale;
     const bonus = (units * BigInt(rate) + divisor / 2n) / divisor;
     // Both coefficients are exact finite decimals. Never use floating point
@@ -78,10 +80,17 @@
     for (const section of snapshot.sections) {
       rows.push({ gap: 22, separator: true });
       wrap(section.title, 28, "#b6ccbd", "600");
-      for (const line of section.lines) wrap(line, 32, "#f3eee4");
+      for (const line of section.lines) {
+        const text = String(line || "");
+        const koHit = /(?:^KO\s|\bKO\b).*?(?:✓|已達 KO|全數達標)/i.test(text);
+        const koMiss = /(?:^KO\s|\bKO\b).*?(?:○|尚未達 KO|未達 KO)/i.test(text);
+        wrap(text, koHit || koMiss ? 34 : 32, koHit ? "#72f2a7" : koMiss ? "#ffd166" : "#f3eee4", koHit || koMiss ? "600" : "400");
+      }
     }
-    rows.push({ gap: 24 });
-    wrap(snapshot.footer, 24, "#bac6c7");
+    if (snapshot.footer) {
+      rows.push({ gap: 24 });
+      wrap(snapshot.footer, 24, "#bac6c7");
+    }
     const height = margin * 2 + rows.reduce((sum, row) => sum + (row.gap || Math.ceil(row.size * 1.6)), 0);
     if (height > 16000) throw new Error("Image too long");
     canvas.width = width; canvas.height = height;
