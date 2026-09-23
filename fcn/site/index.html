@@ -92,7 +92,6 @@
 <body>
 <div id="root"></div>
 <script src="/tracker-tools.js"></script>
-<script src="/product-ocr.js?v=31"></script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useMemo } = React;
 
@@ -764,6 +763,45 @@ function comparePmReportWithClientProducts(reportEntries, statuses) {
     ignoredCount: reportEntries.length - overlaps.length,
   };
 }
+const completedStatusKeys = new Set(["called", "matured_par", "matured_shares"]);
+function parseMemoReport(text) {
+  const source = String(text || "").normalize("NFKC")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\u00A0\u3000\t]+/g, " ");
+  const entries = [];
+  const pattern = /(^|[\s\n])(@?)\s*((?:MA)?\d{4}SN\d{2,6})/gim;
+  let match;
+  while ((match = pattern.exec(source))) {
+    entries.push({ code: normalizeProductCode(match[3]), markedOpen: match[2] === "@" });
+  }
+  return Array.from(new Map(entries.map((entry) => [entry.code, entry])).values());
+}
+function compareMemoReportWithProducts(memoEntries, statuses) {
+  const trackedByCode = new Map(statuses.map((item) => [normalizeProductCode(item.p.code), item]));
+  const memoByCode = new Map(memoEntries.map((entry) => [entry.code, entry]));
+  const removeAt = [];
+  const closedMemoButOpen = [];
+  const openMissingFromTracker = [];
+
+  memoEntries.forEach((entry) => {
+    const tracked = trackedByCode.get(entry.code);
+    if (!tracked) {
+      if (entry.markedOpen) openMissingFromTracker.push(entry);
+      return;
+    }
+    const systemClosed = Boolean(tracked.p.completionConfirmed) || completedStatusKeys.has(tracked.status.key);
+    if (entry.markedOpen && systemClosed) removeAt.push({ ...entry, ...tracked });
+    if (!entry.markedOpen && !systemClosed) closedMemoButOpen.push({ ...entry, ...tracked });
+  });
+
+  const activeMissingFromMemo = statuses.filter((item) => {
+    const code = normalizeProductCode(item.p.code);
+    const systemClosed = Boolean(item.p.completionConfirmed) || completedStatusKeys.has(item.status.key);
+    return code && !systemClosed && !memoByCode.has(code);
+  }).sort((a, b) => compareProductCode(a.p.code, b.p.code));
+
+  return { memoEntries, removeAt, closedMemoButOpen, openMissingFromTracker, activeMissingFromMemo };
+}
 function formatWanAmount(value) {
   const amount = Number(value);
   if (!Number.isFinite(amount) || amount <= 0) return "金額未填";
@@ -993,7 +1031,6 @@ function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
-  const [ocrModalOpen, setOcrModalOpen] = useState(false);
   const [textResult, setTextResult] = useState(null);
   const [imageExport, setImageExport] = useState(null);
   const [imageBusyId, setImageBusyId] = useState(null);
@@ -1047,7 +1084,7 @@ function App() {
       let copied = false;
       try { copied = fallbackCopyText(text); } catch (_) {}
       if (copied) showToast(`${title}已複製`);
-      else { setBonusModalOpen(false); setOcrModalOpen(false); setTextResult({ title, text }); }
+      else { setBonusModalOpen(false); setTextResult({ title, text }); }
     }
   };
   const exportProductImage = async (p, status) => {
@@ -1242,12 +1279,24 @@ function App() {
     return maturityOrder || compareProductCode(a.p.code, b.p.code);
   }), [statuses]);
 
+  const comparisonMode = useMemo(() => {
+    const text = pmReportText.trim();
+    if (!text) return null;
+    return /提前到期|提前出場|到期保本|保本出場|到期接股票|接股票/.test(text) ? "pm" : "memo";
+  }, [pmReportText]);
   const pmComparison = useMemo(() => {
+    if (comparisonMode !== "pm") return null;
     const reportEntries = parsePmReport(pmReportText);
     if (reportEntries.length === 0) return null;
     return comparePmReportWithClientProducts(reportEntries, activeStatuses);
-  }, [pmReportText, activeStatuses]);
+  }, [pmReportText, activeStatuses, comparisonMode]);
   const pmCopyText = useMemo(() => buildPmCopyText(pmComparison?.consistent || []), [pmComparison]);
+  const memoComparison = useMemo(() => {
+    if (comparisonMode !== "memo") return null;
+    const memoEntries = parseMemoReport(pmReportText);
+    if (memoEntries.length === 0) return { memoEntries };
+    return compareMemoReportWithProducts(memoEntries, statuses);
+  }, [pmReportText, statuses, comparisonMode]);
   const copyPmResult = async () => {
     if (!pmCopyText) return;
     try {
@@ -1409,7 +1458,6 @@ function App() {
             <IPlus /> 新增產品
           </button>
           <button onClick={() => setBonusModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▤ 獎金計算</button>
-          <button onClick={() => setOcrModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">▧ 辨識</button>
           <button onClick={() => setBackupModalOpen(true)} className="flex items-center gap-1.5 text-slate-300 hover:text-slate-100 text-sm">
             <IArchive /> 備份與還原
           </button>
@@ -1433,13 +1481,12 @@ function App() {
         <div className="pm-panel mb-6 rounded-2xl p-4 sm:p-5">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <div className="text-lg font-semibold text-slate-50">PM 每日清單比對</div>
-              <div className="text-sm text-slate-400 mt-1 leading-relaxed">只比對清單中與妳客戶商品重複的代號；其他公司商品會自動略過，不會列為未建檔。</div>
+              <div className="text-lg font-semibold text-slate-50">比對清單</div>
             </div>
             {pmReportText && <button onClick={() => setPmReportText("")} className="shrink-0 text-sm text-cyan-300 hover:text-cyan-200">清除</button>}
           </div>
           <textarea value={pmReportText} onChange={(e) => setPmReportText(e.target.value)} rows="5"
-            placeholder={"例如：\n2026SN4253 提前到期\n2026SN4265 提前到期\n2026SN2616 到期保本"}
+            placeholder={"貼上 PM 清單或備忘錄清單\n2026SN4253 提前到期\n@2026SN4068（FCN）終比價（11/20到期）"}
             className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950/80 px-3.5 py-3 text-base text-slate-100 font-num placeholder:text-slate-600" />
 
           {pmComparison && (
@@ -1476,6 +1523,36 @@ function App() {
               )}
               {pmComparison.ignoredCount > 0 && (
                 <div className="text-sm text-slate-400">已略過 {pmComparison.ignoredCount} 筆不在妳客戶名單內的商品。</div>
+              )}
+            </div>
+          )}
+
+          {memoComparison && (
+            <div className="mt-4 space-y-3">
+              {memoComparison.memoEntries.length === 0 ? (
+                <div className="rounded-xl border border-rose-700 bg-rose-950/40 px-4 py-3 text-sm text-rose-100">找不到商品代號。</div>
+              ) : (
+                <>
+                  {memoComparison.removeAt.length > 0 && (
+                    <PmResultGroup title="已結案，請移除 @" tone="danger"
+                      rows={memoComparison.removeAt.map((item) => `${item.code}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.closedMemoButOpen.length > 0 && (
+                    <PmResultGroup title="備忘錄已結案，系統仍未結案" tone="danger"
+                      rows={memoComparison.closedMemoButOpen.map((item) => `${item.code}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.openMissingFromTracker.length > 0 && (
+                    <PmResultGroup title="備忘錄有 @，記錄台找不到" tone="danger"
+                      rows={memoComparison.openMissingFromTracker.map((item) => item.code)} />
+                  )}
+                  {memoComparison.activeMissingFromMemo.length > 0 && (
+                    <PmResultGroup title="未結案，但備忘錄未記錄" tone="danger"
+                      rows={memoComparison.activeMissingFromMemo.map((item) => `${normalizeProductCode(item.p.code)}｜${item.status.label}`)} />
+                  )}
+                  {memoComparison.removeAt.length === 0 && memoComparison.closedMemoButOpen.length === 0 && memoComparison.openMissingFromTracker.length === 0 && memoComparison.activeMissingFromMemo.length === 0 && (
+                    <PmResultGroup title="比對一致" tone="success" rows={[`${memoComparison.memoEntries.length} 檔商品`]} />
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1713,7 +1790,6 @@ function App() {
           onImport={() => fileInputRef.current?.click()} />
       )}
       {bonusModalOpen && <BonusModal onClose={() => setBonusModalOpen(false)} onCopy={copyTextResult} />}
-      {ocrModalOpen && <ProductOcrModal onClose={() => setOcrModalOpen(false)} onCopy={copyTextResult} />}
       {textResult && <SmallModal title={textResult.title} onClose={() => setTextResult(null)}>
         <div className="mb-3 text-sm text-slate-300">請長按下方文字複製。</div>
         <pre className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap break-words text-base leading-relaxed text-slate-100 font-body select-text">{textResult.text}</pre>
@@ -1795,55 +1871,6 @@ function BonusModal({ onClose, onCopy }) {
       <div className="mb-2 text-sm text-slate-300">適用級距 {result.rate}%</div>
       <pre aria-live="polite" className="whitespace-pre-wrap break-all text-2xl leading-relaxed text-slate-100 font-num select-text">{result.text}</pre>
       <button type="button" onClick={() => onCopy(result.text, "獎金結果")} className="pencil-button mt-3 w-full rounded-lg bg-[#9eb09d] px-3 py-2.5 text-base text-slate-950">複製結果</button>
-    </div>}
-  </SmallModal>;
-}
-function ProductOcrModal({ onClose, onCopy }) {
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [progress, setProgress] = useState(null);
-  const [result, setResult] = useState("");
-  const [missing, setMissing] = useState([]);
-  const [error, setError] = useState("");
-  const galleryRef = React.useRef(null), cameraRef = React.useRef(null);
-  const controllerRef = React.useRef(null);
-  useEffect(() => () => controllerRef.current?.abort(), []);
-  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
-  const recognize = async (file) => {
-    if (!file) return;
-    controllerRef.current?.abort();
-    const controller = new AbortController(); controllerRef.current = controller;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(URL.createObjectURL(file)); setProgress({ label: "整理圖片", percent: 0.02 });
-    setResult(""); setMissing([]); setError("");
-    try {
-      const recognized = await FcnProductOcr.recognizeProductImage(file, setProgress, controller.signal);
-      if (controller.signal.aborted) return;
-      setResult(recognized.formatted); setMissing(recognized.parsed.missing || []); setProgress(null);
-    } catch (error) {
-      if (controller.signal.aborted || error?.name === "AbortError") return;
-      setProgress(null); setError("無法完成辨識。請確認網路連線、圖片格式，再重新選擇一次。");
-    }
-  };
-  const choose = (event) => { const file = event.target.files?.[0]; event.target.value = ""; recognize(file); };
-  return <SmallModal title="辨識" onClose={onClose}>
-    <div className="mb-3 text-sm leading-relaxed text-slate-300">請選擇清楚、完整的圖片。辨識完成後請核對內容。</div>
-    <div className="grid grid-cols-2 gap-2">
-      <button type="button" onClick={() => galleryRef.current?.click()} className="pencil-button rounded-lg bg-[#65787c] px-3 py-2.5 text-slate-100">選擇圖片</button>
-      <button type="button" onClick={() => cameraRef.current?.click()} className="pencil-button rounded-lg bg-[#9eb09d] px-3 py-2.5 text-slate-950">開啟相機</button>
-    </div>
-    <input ref={galleryRef} type="file" accept="image/*" className="hidden" onChange={choose} />
-    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choose} />
-    {previewUrl && <img src={previewUrl} alt="待辨識圖片" className="mt-3 max-h-36 w-full rounded-lg bg-slate-950 object-contain" />}
-    {progress && <div className="mt-3 rounded-lg bg-slate-950 p-3">
-      <div className="mb-2 flex justify-between text-sm text-slate-300"><span>{progress.label}</span><span>{Math.round((progress.percent || 0) * 100)}%</span></div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-[#9eb09d] transition-all" style={{ width: `${Math.max(3, Math.round((progress.percent || 0) * 100))}%` }} /></div>
-    </div>}
-    {error && <div className="mt-3 rounded-lg border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-100">{error}</div>}
-    {result && <div className="mt-3">
-      {missing.length > 0 && <div className="mb-2 rounded-lg border border-amber-700 bg-amber-950/40 p-2.5 text-sm text-amber-100">尚未確定：{missing.join("、")}。請在下方直接修正。</div>}
-      <textarea aria-label="辨識結果" value={result} onChange={(event) => setResult(event.target.value)} rows="15"
-        className="w-full resize-y rounded-xl border border-slate-600 bg-slate-950 px-3 py-3 text-base leading-relaxed text-slate-100 font-body" />
-      <button type="button" onClick={() => onCopy(result, "辨識結果")} className="pencil-button mt-2 w-full rounded-lg bg-[#9eb09d] px-3 py-2.5 text-base text-slate-950">複製格式</button>
     </div>}
   </SmallModal>;
 }
